@@ -1,0 +1,181 @@
+@page "/connection"
+@rendermode InteractiveServer
+@inject ApiService ApiService
+@inject IConfiguration Configuration
+
+<PageTitle>WhatsApp Bağlantısı</PageTitle>
+
+<div class="container" style="max-width: 600px;">
+    <h2 class="mb-4">📱 WhatsApp Bağlantısı</h2>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    @if (connectionStatus == ConnectionStatus.Connected)
+    {
+        <div class="card border-success">
+            <div class="card-body text-center">
+                <div class="mb-3">
+                    <span style="font-size: 3rem;">✅</span>
+                </div>
+                <h5 class="card-title text-success">WhatsApp Bağlı</h5>
+                <p class="card-text text-muted">Hesabınız başarıyla bağlandı.</p>
+                <StatusBadge ConnectionStatus="connectionStatus" />
+                <div class="mt-3">
+                    <button class="btn btn-outline-danger" @onclick="Disconnect" disabled="@isLoading">
+                        @if (isLoading)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Bağlantıyı Kes
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+    else if (connectionStatus == ConnectionStatus.Connecting && qrCode != null)
+    {
+        <div class="card">
+            <div class="card-body text-center">
+                <h5 class="card-title">QR Kodu Tarayın</h5>
+                <p class="text-muted">WhatsApp uygulamanızı açın → Bağlı Cihazlar → Cihaz Bağla</p>
+                <QRCodeDisplay Base64Image="@qrCode.Base64Image" />
+                <div class="mt-2">
+                    <StatusBadge ConnectionStatus="connectionStatus" />
+                </div>
+                <p class="text-muted small mt-2">
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                    Bağlantı bekleniyor...
+                </p>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body text-center">
+                <div class="mb-3">
+                    <span style="font-size: 3rem;">📱</span>
+                </div>
+                <h5 class="card-title">WhatsApp Hesabı Bağla</h5>
+                <p class="card-text text-muted">
+                    Sistemi kullanmak için WhatsApp hesabınızı bağlamanız gerekiyor.
+                </p>
+                <StatusBadge ConnectionStatus="connectionStatus" />
+                <div class="mt-3">
+                    <button class="btn btn-success btn-lg" @onclick="Connect" disabled="@isLoading">
+                        @if (isLoading)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Hesap Bağla
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private ConnectionStatus connectionStatus = ConnectionStatus.Disconnected;
+    private QRCodeDto? qrCode;
+    private string? errorMessage;
+    private bool isLoading;
+    private CancellationTokenSource? pollingCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshStatus();
+    }
+
+    private async Task RefreshStatus()
+    {
+        var (status, error) = await ApiService.GetConnectionStatus();
+        if (status.HasValue)
+            connectionStatus = status.Value;
+        else if (error != null)
+            errorMessage = error;
+    }
+
+    private async Task Connect()
+    {
+        isLoading = true;
+        errorMessage = null;
+
+        var (data, error) = await ApiService.ConnectWhatsApp();
+        isLoading = false;
+
+        if (error != null)
+        {
+            errorMessage = error;
+            return;
+        }
+
+        qrCode = data;
+        connectionStatus = ConnectionStatus.Connecting;
+
+        // Start polling for connection status
+        pollingCts?.Cancel();
+        pollingCts = new CancellationTokenSource();
+        _ = PollConnectionStatus(pollingCts.Token);
+    }
+
+    private async Task PollConnectionStatus(CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(65);
+        while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(3000, ct).ContinueWith(_ => { });
+            if (ct.IsCancellationRequested) break;
+
+            var (status, _) = await ApiService.GetConnectionStatus();
+            if (status.HasValue)
+            {
+                connectionStatus = status.Value;
+                await InvokeAsync(StateHasChanged);
+
+                if (status.Value == ConnectionStatus.Connected)
+                {
+                    qrCode = null;
+                    break;
+                }
+            }
+        }
+
+        if (!ct.IsCancellationRequested && connectionStatus != ConnectionStatus.Connected)
+        {
+            connectionStatus = ConnectionStatus.Disconnected;
+            qrCode = null;
+            errorMessage = "QR kod tarama süresi doldu. Lütfen tekrar deneyin.";
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task Disconnect()
+    {
+        isLoading = true;
+        pollingCts?.Cancel();
+
+        var error = await ApiService.Disconnect();
+        isLoading = false;
+
+        if (error != null)
+            errorMessage = error;
+        else
+        {
+            connectionStatus = ConnectionStatus.Disconnected;
+            qrCode = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        pollingCts?.Cancel();
+        pollingCts?.Dispose();
+    }
+}

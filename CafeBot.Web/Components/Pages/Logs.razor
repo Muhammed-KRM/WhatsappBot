@@ -1,0 +1,531 @@
+@page "/logs"
+@rendermode InteractiveServer
+@inject ApiService ApiService
+
+<PageTitle>Loglar</PageTitle>
+
+<div class="container-fluid">
+    <h2 class="mb-4">📊 Sistem Logları</h2>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    <!-- İstatistik Kartları -->
+    @if (stats != null)
+    {
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-2">
+                <div class="card text-center border-primary">
+                    <div class="card-body py-2">
+                        <div class="fs-4 fw-bold text-primary">@stats.Last24hRequests</div>
+                        <div class="small text-muted">24s İstek</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <div class="card text-center border-danger">
+                    <div class="card-body py-2">
+                        <div class="fs-4 fw-bold text-danger">@stats.Last24hErrors</div>
+                        <div class="small text-muted">24s 5xx Hata</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <div class="card text-center border-warning">
+                    <div class="card-body py-2">
+                        <div class="fs-4 fw-bold text-warning">@stats.Last24hFunctionErrors</div>
+                        <div class="small text-muted">24s Fonksiyon Hatası</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <div class="card text-center border-info">
+                    <div class="card-body py-2">
+                        <div class="fs-4 fw-bold text-info">@stats.AvgDurationMs ms</div>
+                        <div class="small text-muted">Ort. Süre</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <div class="card text-center">
+                    <div class="card-body py-2">
+                        <div class="fs-4 fw-bold">@stats.TotalEndpointLogs</div>
+                        <div class="small text-muted">Toplam İstek</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <div class="card text-center">
+                    <div class="card-body py-2">
+                        <div class="fs-4 fw-bold">@stats.TotalFunctionErrors</div>
+                        <div class="small text-muted">Toplam Hata</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Tab Menüsü -->
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <button class="nav-link @(activeTab == "endpoints" ? "active" : "")"
+                    @onclick='() => SwitchTab("endpoints")'>
+                🌐 Endpoint Logları
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(activeTab == "functions" ? "active" : "")"
+                    @onclick='() => SwitchTab("functions")'>
+                ⚠️ Fonksiyon Hataları
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(activeTab == "process" ? "active" : "")"
+                    @onclick='() => SwitchTab("process")'>
+                🔍 Süreç Takibi
+            </button>
+        </li>
+    </ul>
+
+    <!-- Endpoint Logları -->
+    @if (activeTab == "endpoints")
+    {
+        <div class="d-flex gap-2 mb-3 align-items-center">
+            <select class="form-select form-select-sm" style="width:auto"
+                    @bind="statusFilter" @bind:after="LoadEndpointLogs">
+                <option value="">Tüm Status</option>
+                <option value="200">200 OK</option>
+                <option value="400">400 Bad Request</option>
+                <option value="404">404 Not Found</option>
+                <option value="500">500 Server Error</option>
+            </select>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="LoadEndpointLogs">🔄 Yenile</button>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="text-center py-4"><div class="spinner-border text-primary"></div></div>
+        }
+        else if (endpointLogs?.Logs.Count == 0)
+        {
+            <div class="alert alert-info">Henüz endpoint logu yok.</div>
+        }
+        else if (endpointLogs != null)
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Zaman</th>
+                            <th>Method</th>
+                            <th>Path</th>
+                            <th>Status</th>
+                            <th>Süre</th>
+                            <th>IP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var log in endpointLogs.Logs)
+                        {
+                            <tr class="@GetRowClass(log.StatusCode)" @onclick="() => ToggleLogExpansion(log.Id)" style="cursor:pointer">
+                                <td class="text-nowrap small">@log.CreatedAt.ToLocalTime().ToString("dd.MM HH:mm:ss")</td>
+                                <td><span class="badge @GetMethodBadge(log.Method)">@log.Method</span></td>
+                                <td class="small">@log.Path@log.Query</td>
+                                <td><span class="badge @GetStatusBadge(log.StatusCode)">@log.StatusCode</span></td>
+                                <td class="small">@log.DurationMs ms</td>
+                                <td class="small text-muted">@(log.IpAddress ?? "-")</td>
+                            </tr>
+                            @if (expandedLogIds.Contains(log.Id))
+                            {
+                                <tr class="bg-light">
+                                    <td colspan="6" class="p-3">
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                <h6 class="small fw-bold">Request Body</h6>
+                                                <pre class="small p-2 bg-white border rounded" style="max-height:300px;overflow:auto">@(string.IsNullOrEmpty(log.RequestBody) ? "No Body" : log.RequestBody)</pre>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <h6 class="small fw-bold">Response Body</h6>
+                                                <pre class="small p-2 bg-white border rounded" style="max-height:300px;overflow:auto">@(string.IsNullOrEmpty(log.ResponseBody) ? "No Body" : log.ResponseBody)</pre>
+                                            </div>
+                                        </div>
+                                        <div class="mt-2 small text-muted">Trace ID: @log.TraceId</div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <small class="text-muted">Toplam: @endpointLogs.Total kayıt</small>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-secondary"
+                            @onclick="PrevEndpointPage"
+                            disabled="@(endpointPage <= 1)">← Önceki</button>
+                    <span class="btn btn-sm btn-light">@endpointPage</span>
+                    <button class="btn btn-sm btn-outline-secondary"
+                            @onclick="NextEndpointPage"
+                            disabled="@(endpointLogs.Logs.Count < 50)">Sonraki →</button>
+                </div>
+            </div>
+        }
+    }
+
+    <!-- Fonksiyon Hataları -->
+    @if (activeTab == "functions")
+    {
+        <div class="d-flex gap-2 mb-3">
+            <button class="btn btn-sm btn-outline-secondary" @onclick="LoadFunctionLogs">🔄 Yenile</button>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="text-center py-4"><div class="spinner-border text-warning"></div></div>
+        }
+        else if (functionLogs?.Logs.Count == 0)
+        {
+            <div class="alert alert-success">✅ Fonksiyon hatası yok.</div>
+        }
+        else if (functionLogs != null)
+        {
+            @foreach (var log in functionLogs.Logs)
+            {
+                <div class="card mb-2 border-@(log.Severity == "Critical" ? "danger" : "warning")">
+                    <div class="card-header d-flex justify-content-between py-1">
+                        <span>
+                            <span class="badge bg-@(log.Severity == "Critical" ? "danger" : "warning") text-dark me-2">@log.Severity</span>
+                            <strong>@log.ClassName?.Split('.').Last()</strong>.<span class="text-muted">@log.MethodName</span>
+                            <small class="text-muted ms-2">satır @log.LineNumber</small>
+                        </span>
+                        <small class="text-muted">@log.CreatedAt.ToLocalTime().ToString("dd.MM HH:mm:ss")</small>
+                    </div>
+                    <div class="card-body py-2">
+                        <div class="text-danger small fw-bold">[@log.ErrorCode] @log.ErrorMessage</div>
+                        
+                        @if (!string.IsNullOrEmpty(log.InputValue))
+                        {
+                            <div class="mt-2">
+                                <h6 class="small fw-bold mb-1">Input (@log.InputType)</h6>
+                                <pre class="small p-2 bg-light border rounded" style="max-height:150px;overflow:auto">@log.InputValue</pre>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(log.StackTrace))
+                        {
+                            <details class="mt-1">
+                                <summary class="small text-muted" style="cursor:pointer">Stack Trace</summary>
+                                <pre class="small mt-1 p-2 bg-light rounded" style="max-height:200px;overflow:auto">@log.StackTrace</pre>
+                            </details>
+                        }
+                    </div>
+                </div>
+            }
+
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <small class="text-muted">Toplam: @functionLogs.Total hata</small>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-secondary"
+                            @onclick="PrevFunctionPage"
+                            disabled="@(functionPage <= 1)">← Önceki</button>
+                    <span class="btn btn-sm btn-light">@functionPage</span>
+                    <button class="btn btn-sm btn-outline-secondary"
+                            @onclick="NextFunctionPage"
+                            disabled="@(functionLogs.Logs.Count < 50)">Sonraki →</button>
+                </div>
+            </div>
+        }
+    }
+
+    <!-- Süreç Takibi -->
+    @if (activeTab == "process")
+    {
+        <div class="d-flex gap-2 mb-3">
+            <button class="btn btn-sm btn-outline-secondary" @onclick="LoadProcessLogs">🔄 Yenile</button>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="text-center py-4"><div class="spinner-border text-info"></div></div>
+        }
+        else if (processLogs?.Traces.Count == 0)
+        {
+            <div class="alert alert-info">Henüz süreç logu yok. WhatsApp grubuna bir mesaj gönderin.</div>
+        }
+        else if (processLogs != null)
+        {
+            @foreach (var trace in processLogs.Traces)
+            {
+                <div class="card mb-3 border-@(trace.HasError ? "danger" : "success")">
+                    <div class="card-header d-flex justify-content-between align-items-center py-2"
+                         style="cursor:pointer" @onclick="() => ToggleTrace(trace.TraceId)">
+                        <div>
+                            <span class="badge bg-@(trace.HasError ? "danger" : "success") me-2">
+                                @(trace.HasError ? "❌ Başarısız" : "✅ Başarılı")
+                            </span>
+                            <strong class="me-2">📨 @trace.TraceId</strong>
+                            <span class="badge bg-secondary me-1">@trace.TotalSteps adım</span>
+                            <span class="badge bg-info">@trace.TotalDurationMs ms</span>
+                        </div>
+                        <div class="text-end">
+                            <small class="text-muted">@trace.StartTime.ToLocalTime().ToString("dd.MM HH:mm:ss")</small>
+                            <span class="ms-2">@(expandedTraceIds.Contains(trace.TraceId) ? "▲" : "▼")</span>
+                        </div>
+                    </div>
+
+                    @if (trace.HasError && !string.IsNullOrEmpty(trace.ErrorMessage))
+                    {
+                        <div class="card-body py-1 bg-danger bg-opacity-10">
+                            <small class="text-danger fw-bold">Son hata: @trace.ErrorMessage</small>
+                        </div>
+                    }
+
+                    @if (expandedTraceIds.Contains(trace.TraceId))
+                    {
+                        <div class="card-body p-0">
+                            @if (traceDetails.TryGetValue(trace.TraceId, out var steps))
+                            {
+                                <div class="list-group list-group-flush">
+                                    @foreach (var step in steps)
+                                    {
+                                        <div class="list-group-item py-2 @GetStepBgClass(step.Status)"
+                                             style="cursor:pointer" @onclick="() => ToggleStep(step.Id)">
+                                            <div class="d-flex justify-content-between align-items-start">
+                                                <div>
+                                                    <span class="me-1">@GetStepIcon(step.Status)</span>
+                                                    <strong class="me-1">@step.StepOrder.</strong>
+                                                    <span class="fw-semibold">@step.StepName</span>
+                                                    <small class="text-muted ms-2">@step.FunctionName</small>
+                                                </div>
+                                                <div class="text-end">
+                                                    <span class="badge bg-secondary">@step.DurationMs ms</span>
+                                                </div>
+                                            </div>
+
+                                            @if (!string.IsNullOrEmpty(step.ErrorMessage) && step.Status == "Error")
+                                            {
+                                                <div class="mt-1">
+                                                    <small class="text-danger fw-bold">❌ @step.ErrorMessage</small>
+                                                </div>
+                                            }
+
+                                            @if (expandedStepIds.Contains(step.Id))
+                                            {
+                                                <div class="mt-2 border-top pt-2">
+                                                    <div class="row">
+                                                        <div class="col-md-6">
+                                                            <h6 class="small fw-bold text-primary mb-1">📥 Input</h6>
+                                                            <pre class="small p-2 bg-white border rounded mb-0" style="max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all">@(string.IsNullOrEmpty(step.InputData) ? "(boş)" : FormatJson(step.InputData))</pre>
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <h6 class="small fw-bold text-success mb-1">📤 Output</h6>
+                                                            <pre class="small p-2 bg-white border rounded mb-0" style="max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all">@(string.IsNullOrEmpty(step.OutputData) ? "(boş)" : FormatJson(step.OutputData))</pre>
+                                                        </div>
+                                                    </div>
+                                                    @if (!string.IsNullOrEmpty(step.ErrorMessage))
+                                                    {
+                                                        <div class="mt-2">
+                                                            <h6 class="small fw-bold text-danger mb-1">⚠️ Hata Detayı</h6>
+                                                            <pre class="small p-2 bg-danger bg-opacity-10 border border-danger rounded mb-0" style="max-height:200px;overflow:auto;white-space:pre-wrap">@step.ErrorMessage</pre>
+                                                        </div>
+                                                    }
+                                                    <div class="mt-1 small text-muted">
+                                                        Zaman: @step.CreatedAt.ToLocalTime().ToString("HH:mm:ss.fff")
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="text-center py-3">
+                                    <div class="spinner-border spinner-border-sm text-info"></div>
+                                    <span class="ms-2">Yükleniyor...</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <!-- Pagination -->
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <small class="text-muted">Toplam: @processLogs.Total süreç</small>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-secondary"
+                            @onclick="PrevProcessPage"
+                            disabled="@(processPage <= 1)">← Önceki</button>
+                    <span class="btn btn-sm btn-light">@processPage</span>
+                    <button class="btn btn-sm btn-outline-secondary"
+                            @onclick="NextProcessPage"
+                            disabled="@(processLogs.Traces.Count < 20)">Sonraki →</button>
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private string activeTab = "endpoints";
+    private bool isLoading;
+    private string? errorMessage;
+    private string statusFilter = "";
+
+    private LogStatsDto? stats;
+    private EndpointLogsResponse? endpointLogs;
+    private FunctionLogsResponse? functionLogs;
+    private ProcessLogsResponse? processLogs;
+
+    private int endpointPage = 1;
+    private int functionPage = 1;
+    private int processPage = 1;
+    private HashSet<int> expandedLogIds = new();
+    private HashSet<string> expandedTraceIds = new();
+    private HashSet<int> expandedStepIds = new();
+    private Dictionary<string, List<ProcessLogDto>> traceDetails = new();
+
+    private void ToggleLogExpansion(int id)
+    {
+        if (expandedLogIds.Contains(id))
+            expandedLogIds.Remove(id);
+        else
+            expandedLogIds.Add(id);
+    }
+
+    private async Task ToggleTrace(string traceId)
+    {
+        if (expandedTraceIds.Contains(traceId))
+        {
+            expandedTraceIds.Remove(traceId);
+        }
+        else
+        {
+            expandedTraceIds.Add(traceId);
+            if (!traceDetails.ContainsKey(traceId))
+            {
+                var (data, error) = await ApiService.GetProcessTrace(traceId);
+                if (error == null && data != null)
+                    traceDetails[traceId] = data;
+                else
+                    errorMessage = error;
+            }
+        }
+    }
+
+    private void ToggleStep(int id)
+    {
+        if (expandedStepIds.Contains(id))
+            expandedStepIds.Remove(id);
+        else
+            expandedStepIds.Add(id);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await Task.WhenAll(LoadStats(), LoadEndpointLogs());
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadStats()
+    {
+        var (data, error) = await ApiService.GetLogStats();
+        if (error == null) stats = data;
+    }
+
+    private async Task LoadEndpointLogs()
+    {
+        isLoading = true;
+        int? sc = string.IsNullOrEmpty(statusFilter) ? null : int.Parse(statusFilter);
+        var (data, error) = await ApiService.GetEndpointLogs(endpointPage, 50, sc);
+        isLoading = false;
+        if (error != null) errorMessage = error;
+        else endpointLogs = data;
+    }
+
+    private async Task LoadFunctionLogs()
+    {
+        isLoading = true;
+        var (data, error) = await ApiService.GetFunctionLogs(functionPage, 50);
+        isLoading = false;
+        if (error != null) errorMessage = error;
+        else functionLogs = data;
+    }
+
+    private async Task LoadProcessLogs()
+    {
+        isLoading = true;
+        traceDetails.Clear();
+        expandedTraceIds.Clear();
+        expandedStepIds.Clear();
+        var (data, error) = await ApiService.GetProcessLogs(processPage, 20);
+        isLoading = false;
+        if (error != null) errorMessage = error;
+        else processLogs = data;
+    }
+
+    private async Task SwitchTab(string tab)
+    {
+        activeTab = tab;
+        if (tab == "endpoints" && endpointLogs == null) await LoadEndpointLogs();
+        if (tab == "functions" && functionLogs == null) await LoadFunctionLogs();
+        if (tab == "process" && processLogs == null) await LoadProcessLogs();
+    }
+
+    private async Task PrevEndpointPage() { if (endpointPage > 1) { endpointPage--; await LoadEndpointLogs(); } }
+    private async Task NextEndpointPage() { endpointPage++; await LoadEndpointLogs(); }
+    private async Task PrevFunctionPage() { if (functionPage > 1) { functionPage--; await LoadFunctionLogs(); } }
+    private async Task NextFunctionPage() { functionPage++; await LoadFunctionLogs(); }
+    private async Task PrevProcessPage() { if (processPage > 1) { processPage--; await LoadProcessLogs(); } }
+    private async Task NextProcessPage() { processPage++; await LoadProcessLogs(); }
+
+    private static string GetRowClass(int status) => status >= 500 ? "table-danger" : status >= 400 ? "table-warning" : "";
+    private static string GetStatusBadge(int status) => status >= 500 ? "bg-danger" : status >= 400 ? "bg-warning text-dark" : "bg-success";
+    private static string GetMethodBadge(string method) => method switch
+    {
+        "GET" => "bg-primary",
+        "POST" => "bg-success",
+        "PUT" => "bg-warning text-dark",
+        "DELETE" => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private static string GetStepIcon(string status) => status switch
+    {
+        "OK" => "✅",
+        "Error" => "❌",
+        "Skip" => "⏩",
+        _ => "⬜"
+    };
+
+    private static string GetStepBgClass(string status) => status switch
+    {
+        "Error" => "bg-danger bg-opacity-10",
+        "Skip" => "bg-warning bg-opacity-10",
+        _ => ""
+    };
+
+    private static string FormatJson(string json)
+    {
+        try
+        {
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            return System.Text.Json.JsonSerializer.Serialize(doc, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch
+        {
+            return json;
+        }
+    }
+}

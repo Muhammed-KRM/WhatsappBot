@@ -1,0 +1,189 @@
+@page "/priority"
+@rendermode InteractiveServer
+@inject ApiService ApiService
+
+<PageTitle>Öncelik Sırası</PageTitle>
+
+<div class="container" style="max-width: 600px;">
+    <h2 class="mb-4">⚙️ Öncelik Sırası</h2>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(successMessage))
+    {
+        <div class="alert alert-success alert-dismissible">
+            @successMessage
+            <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
+        </div>
+    }
+
+    @if (duplicateWarning)
+    {
+        <div class="alert alert-warning">
+            ⚠️ Aynı saat değeri birden fazla kez eklenemez.
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">Saat Öncelik Listesi</h5>
+            <p class="text-muted small">
+                Sistem, vardiya mesajlarındaki saatleri bu sıraya göre değerlendirir.
+                En üstteki saat en yüksek önceliğe sahiptir.
+            </p>
+
+            @if (isLoading)
+            {
+                <div class="text-center py-3">
+                    <div class="spinner-border text-primary"></div>
+                </div>
+            }
+            else
+            {
+                @if (priorityList.Count == 0)
+                {
+                    <p class="text-muted fst-italic">Henüz saat eklenmedi.</p>
+                }
+
+                @for (int i = 0; i < priorityList.Count; i++)
+                {
+                    var index = i;
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <span class="badge bg-primary" style="min-width: 28px;">@(i + 1)</span>
+                        <input type="number"
+                               class="form-control"
+                               style="max-width: 100px;"
+                               min="0"
+                               max="23"
+                               value="@priorityList[index]"
+                               @onchange="e => OnHourChanged(index, e)" />
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveHour(index)">
+                            🗑️
+                        </button>
+                        @if (index > 0)
+                        {
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveUp(index)" title="Yukarı taşı">
+                                ↑
+                            </button>
+                        }
+                        @if (index < priorityList.Count - 1)
+                        {
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveDown(index)" title="Aşağı taşı">
+                                ↓
+                            </button>
+                        }
+                    </div>
+                }
+
+                <div class="d-flex gap-2 mt-3">
+                    <button class="btn btn-outline-primary" @onclick="AddHour">
+                        ➕ Saat Ekle
+                    </button>
+                    <button class="btn btn-primary"
+                            @onclick="SavePriority"
+                            disabled="@(priorityList.Count == 0 || isSaving || duplicateWarning)">
+                        @if (isSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Kaydet
+                    </button>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<int> priorityList = new();
+    private string? errorMessage;
+    private string? successMessage;
+    private bool duplicateWarning;
+    private bool isLoading;
+    private bool isSaving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        isLoading = true;
+        var (config, error) = await ApiService.GetConfig();
+        isLoading = false;
+
+        if (error != null)
+            errorMessage = error;
+        else if (config != null)
+            priorityList = new List<int>(config.PriorityList);
+    }
+
+    private void OnHourChanged(int index, ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+        {
+            value = Math.Clamp(value, 0, 23);
+            priorityList[index] = value;
+            CheckDuplicates();
+        }
+    }
+
+    private void AddHour()
+    {
+        // Find a value not already in the list
+        for (int h = 0; h <= 23; h++)
+        {
+            if (!priorityList.Contains(h))
+            {
+                priorityList.Add(h);
+                CheckDuplicates();
+                return;
+            }
+        }
+        // All hours used
+        priorityList.Add(0);
+        CheckDuplicates();
+    }
+
+    private void RemoveHour(int index)
+    {
+        priorityList.RemoveAt(index);
+        CheckDuplicates();
+    }
+
+    private void MoveUp(int index)
+    {
+        if (index <= 0) return;
+        (priorityList[index - 1], priorityList[index]) = (priorityList[index], priorityList[index - 1]);
+    }
+
+    private void MoveDown(int index)
+    {
+        if (index >= priorityList.Count - 1) return;
+        (priorityList[index + 1], priorityList[index]) = (priorityList[index], priorityList[index + 1]);
+    }
+
+    private void CheckDuplicates()
+    {
+        duplicateWarning = priorityList.Count != priorityList.Distinct().Count();
+    }
+
+    private async Task SavePriority()
+    {
+        if (priorityList.Count == 0 || duplicateWarning) return;
+
+        isSaving = true;
+        errorMessage = null;
+        successMessage = null;
+
+        var error = await ApiService.UpdatePriority(priorityList);
+        isSaving = false;
+
+        if (error != null)
+            errorMessage = error;
+        else
+            successMessage = "Öncelik listesi başarıyla kaydedildi.";
+    }
+}

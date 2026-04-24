@@ -1,0 +1,237 @@
+@page "/"
+@rendermode InteractiveServer
+@inject ApiService ApiService
+
+<PageTitle>Dashboard - WhatsApp Kafe Otomasyon</PageTitle>
+
+<h2 class="mb-4">📊 Dashboard</h2>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger alert-dismissible">
+        @errorMessage
+        <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(successMessage))
+{
+    <div class="alert alert-success alert-dismissible">
+        @successMessage
+        <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
+    </div>
+}
+
+<div class="row g-4">
+    <!-- Sistem Durumu Kartı -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <strong>🔧 Sistem Durumu</strong>
+            </div>
+            <div class="card-body">
+                @if (isLoading)
+                {
+                    <div class="text-center py-3">
+                        <div class="spinner-border spinner-border-sm text-primary"></div>
+                    </div>
+                }
+                else if (config != null)
+                {
+                    <table class="table table-borderless mb-0">
+                        <tbody>
+                            <tr>
+                                <td class="text-muted">WhatsApp Bağlantısı</td>
+                                <td><StatusBadge ConnectionStatus="config.ConnectionStatus" /></td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Sistem Durumu</td>
+                                <td><StatusBadge SystemStatus="config.SystemStatus" /></td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Hedef Grup</td>
+                                <td>
+                                    @if (!string.IsNullOrEmpty(config.TargetGroupName))
+                                    {
+                                        <span class="badge bg-info text-dark">@config.TargetGroupName</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted fst-italic">Seçilmedi</span>
+                                    }
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Öncelik Listesi</td>
+                                <td>
+                                    @if (config.PriorityList.Count > 0)
+                                    {
+                                        <span>@string.Join(" → ", config.PriorityList)</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted fst-italic">Ayarlanmadı</span>
+                                    }
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Kontrol Kartı -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <strong>🎮 Kontrol</strong>
+            </div>
+            <div class="card-body d-flex flex-column justify-content-center align-items-center">
+                @if (config != null)
+                {
+                    @if (config.SystemStatus == SystemStatus.Running)
+                    {
+                        <div class="text-center">
+                            <div class="mb-3">
+                                <span style="font-size: 3rem;">🟢</span>
+                            </div>
+                            <p class="text-success fw-bold">Sistem Aktif</p>
+                            <button class="btn btn-danger btn-lg"
+                                    @onclick="StopSystem"
+                                    disabled="@isActionLoading">
+                                @if (isActionLoading)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                }
+                                ⏹️ Durdur
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center">
+                            <div class="mb-3">
+                                <span style="font-size: 3rem;">🔴</span>
+                            </div>
+                            <p class="text-muted">Sistem Pasif</p>
+                            <button class="btn btn-success btn-lg"
+                                    @onclick="StartSystem"
+                                    disabled="@isActionLoading">
+                                @if (isActionLoading)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                }
+                                ▶️ Başlat
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Son Aktiviteler -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong>📋 Son Aktiviteler</strong>
+                <a href="/activity" class="btn btn-sm btn-outline-secondary">Tümünü Gör</a>
+            </div>
+            <div class="card-body p-0">
+                @if (recentLogs == null || recentLogs.Count == 0)
+                {
+                    <div class="text-center py-3 text-muted">
+                        <p>Henüz aktivite kaydı yok.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="px-3">
+                        @foreach (var log in recentLogs)
+                        {
+                            <ActivityItem Log="@log" />
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private ConfigDto? config;
+    private List<ActivityLogDto>? recentLogs;
+    private string? errorMessage;
+    private string? successMessage;
+    private bool isLoading;
+    private bool isActionLoading;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadData();
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadData()
+    {
+        isLoading = true;
+
+        var configTask = ApiService.GetConfig();
+        var logsTask = ApiService.GetActivityLogs(1, 5);
+
+        await Task.WhenAll(configTask, logsTask);
+
+        var (configData, configError) = await configTask;
+        var (logsData, logsError) = await logsTask;
+
+        isLoading = false;
+
+        if (configError != null)
+            errorMessage = configError;
+        else
+            config = configData;
+
+        if (logsData != null)
+            recentLogs = logsData;
+    }
+
+    private async Task StartSystem()
+    {
+        isActionLoading = true;
+        errorMessage = null;
+        successMessage = null;
+
+        var error = await ApiService.UpdateSystemStatus(SystemStatus.Running);
+        isActionLoading = false;
+
+        if (error != null)
+            errorMessage = error;
+        else
+        {
+            successMessage = "Sistem başlatıldı.";
+            await LoadData();
+        }
+    }
+
+    private async Task StopSystem()
+    {
+        isActionLoading = true;
+        errorMessage = null;
+        successMessage = null;
+
+        var error = await ApiService.UpdateSystemStatus(SystemStatus.Stopped);
+        isActionLoading = false;
+
+        if (error != null)
+            errorMessage = error;
+        else
+        {
+            successMessage = "Sistem durduruldu.";
+            await LoadData();
+        }
+    }
+}

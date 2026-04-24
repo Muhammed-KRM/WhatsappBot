@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="CafeBot.API/CafeBot.API.csproj" />
+  <Project Path="CafeBot.Business/CafeBot.Business.csproj" />
+  <Project Path="CafeBot.Data/CafeBot.Data.csproj" />
+  <Project Path="CafeBot.Web/CafeBot.Web.csproj" />
+  <Project Path="CafeBot.Worker/CafeBot.Worker.csproj" />
+</Solution>

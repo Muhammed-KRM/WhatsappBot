@@ -1,0 +1,33 @@
+<div class="d-flex align-items-start py-2 border-bottom">
+    <span class="me-2 mt-1">@GetIcon()</span>
+    <div class="flex-grow-1">
+        <span class="@GetTextClass() fw-semibold">@Log.Message</span>
+        @if (!string.IsNullOrEmpty(Log.Details))
+        {
+            <div class="text-muted small mt-1">@Log.Details</div>
+        }
+    </div>
+    <small class="text-muted ms-2 text-nowrap">@Log.Timestamp.ToLocalTime().ToString("HH:mm:ss")</small>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ActivityLogDto Log { get; set; } = default!;
+
+    private string GetIcon() => Log.Type switch
+    {
+        ActivityType.Success => "✅",
+        ActivityType.Error   => "❌",
+        ActivityType.Warning => "⚠️",
+        ActivityType.Info    => "ℹ️",
+        _ => "•"
+    };
+
+    private string GetTextClass() => Log.Type switch
+    {
+        ActivityType.Success => "text-success",
+        ActivityType.Error   => "text-danger",
+        ActivityType.Warning => "text-warning",
+        ActivityType.Info    => "text-primary",
+        _ => ""
+    };
+}

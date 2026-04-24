@@ -1,0 +1,150 @@
+@page "/group-selection"
+@rendermode InteractiveServer
+@inject ApiService ApiService
+
+<PageTitle>Grup Seçimi</PageTitle>
+
+<div class="container" style="max-width: 600px;">
+    <h2 class="mb-4">👥 Grup Seçimi</h2>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(successMessage))
+    {
+        <div class="alert alert-success alert-dismissible">
+            @successMessage
+            <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(currentGroupName))
+    {
+        <div class="alert alert-info">
+            <strong>Mevcut Grup:</strong> @currentGroupName
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">WhatsApp Grubu Seç</h5>
+            <p class="text-muted small">Sistemin izleyeceği kafe WhatsApp grubunu seçin.</p>
+
+            @if (isLoading)
+            {
+                <div class="text-center py-3">
+                    <div class="spinner-border text-primary"></div>
+                    <p class="mt-2 text-muted">Gruplar yükleniyor...</p>
+                </div>
+            }
+            else if (groups != null)
+            {
+                <div class="mb-3">
+                    <label class="form-label">Grup</label>
+                    <select class="form-select" @bind="selectedGroupId">
+                        <option value="">-- Grup seçin --</option>
+                        @foreach (var group in groups)
+                        {
+                            <option value="@group.Id">@group.Name (@group.ParticipantCount kişi)</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary"
+                            @onclick="SaveGroup"
+                            disabled="@(string.IsNullOrEmpty(selectedGroupId) || isSaving)">
+                        @if (isSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Kaydet
+                    </button>
+                    <button class="btn btn-outline-secondary" @onclick="LoadGroups" disabled="@isLoading">
+                        🔄 Yenile
+                    </button>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<GroupDto>? groups;
+    private string selectedGroupId = string.Empty;
+    private string? currentGroupName;
+    private string? errorMessage;
+    private string? successMessage;
+    private bool isLoading;
+    private bool isSaving;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            isLoading = true;
+            StateHasChanged();
+
+            await LoadCurrentConfig();
+            await LoadGroups();
+
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadCurrentConfig()
+    {
+        var (config, _) = await ApiService.GetConfig();
+        if (config != null)
+        {
+            currentGroupName = config.TargetGroupName;
+            selectedGroupId = config.TargetGroupId ?? string.Empty;
+        }
+    }
+
+    private async Task LoadGroups()
+    {
+        isLoading = true;
+        errorMessage = null;
+        StateHasChanged();
+
+        var (data, error) = await ApiService.GetGroups();
+        isLoading = false;
+
+        if (error != null)
+            errorMessage = error;
+        else
+            groups = data;
+            
+        StateHasChanged();
+    }
+
+    private async Task SaveGroup()
+    {
+        if (string.IsNullOrEmpty(selectedGroupId)) return;
+
+        isSaving = true;
+        errorMessage = null;
+        successMessage = null;
+
+        var selectedGroup = groups?.FirstOrDefault(g => g.Id == selectedGroupId);
+        var groupName = selectedGroup?.Name ?? selectedGroupId;
+
+        var error = await ApiService.UpdateGroup(selectedGroupId, groupName);
+        isSaving = false;
+
+        if (error != null)
+            errorMessage = error;
+        else
+        {
+            currentGroupName = groupName;
+            successMessage = $"Grup başarıyla kaydedildi: {groupName}";
+        }
+    }
+}

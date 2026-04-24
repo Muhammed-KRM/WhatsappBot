@@ -1,0 +1,184 @@
+@page "/activity"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject ApiService ApiService
+@inject IConfiguration Configuration
+@inject NavigationManager NavigationManager
+
+<PageTitle>Aktivite Geçmişi</PageTitle>
+
+<div class="container" style="max-width: 800px;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>📋 Aktivite Geçmişi</h2>
+        <div>
+            @if (isConnected)
+            {
+                <span class="badge bg-success me-2">🔴 Canlı</span>
+            }
+            else
+            {
+                <span class="badge bg-secondary me-2">Bağlantı yok</span>
+            }
+            <button class="btn btn-sm btn-outline-secondary" @onclick="LoadLogs" disabled="@isLoading">
+                🔄 Yenile
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-body p-0">
+            @if (isLoading && activityLogs.Count == 0)
+            {
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary"></div>
+                    <p class="mt-2 text-muted">Yükleniyor...</p>
+                </div>
+            }
+            else if (activityLogs.Count == 0)
+            {
+                <div class="text-center py-4 text-muted">
+                    <p>Henüz aktivite kaydı yok.</p>
+                </div>
+            }
+            else
+            {
+                <div class="px-3">
+                    @foreach (var log in activityLogs)
+                    {
+                        <ActivityItem Log="@log" />
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (activityLogs.Count > 0)
+    {
+        <div class="d-flex justify-content-between align-items-center mt-3">
+            <button class="btn btn-outline-secondary"
+                    @onclick="PreviousPage"
+                    disabled="@(currentPage <= 1 || isLoading)">
+                ← Önceki
+            </button>
+            <span class="text-muted">Sayfa @currentPage</span>
+            <button class="btn btn-outline-secondary"
+                    @onclick="NextPage"
+                    disabled="@(activityLogs.Count < pageSize || isLoading)">
+                Sonraki →
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    private List<ActivityLogDto> activityLogs = new();
+    private HubConnection? hubConnection;
+    private string? errorMessage;
+    private bool isLoading;
+    private bool isConnected;
+    private int currentPage = 1;
+    private const int pageSize = 20;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadLogs();
+            StateHasChanged();
+            await ConnectSignalR();
+        }
+    }
+
+    private async Task ConnectSignalR()
+    {
+        try
+        {
+            var apiBaseUrl = Configuration["ApiBaseUrl"] ?? "http://localhost:5000";
+            var hubUrl = $"{apiBaseUrl.TrimEnd('/')}/hubs/activity";
+
+            hubConnection = new HubConnectionBuilder()
+                .WithUrl(hubUrl)
+                .WithAutomaticReconnect()
+                .Build();
+
+            hubConnection.On<ActivityLogDto>("ReceiveActivity", (activity) =>
+            {
+                activityLogs.Insert(0, activity);
+                // Keep list manageable
+                if (activityLogs.Count > pageSize * 2)
+                    activityLogs.RemoveAt(activityLogs.Count - 1);
+                InvokeAsync(StateHasChanged);
+            });
+
+            hubConnection.Reconnected += _ =>
+            {
+                isConnected = true;
+                return InvokeAsync(StateHasChanged);
+            };
+
+            hubConnection.Reconnecting += _ =>
+            {
+                isConnected = false;
+                return InvokeAsync(StateHasChanged);
+            };
+
+            hubConnection.Closed += _ =>
+            {
+                isConnected = false;
+                return InvokeAsync(StateHasChanged);
+            };
+
+            await hubConnection.StartAsync();
+            isConnected = true;
+        }
+        catch (Exception ex)
+        {
+            // SignalR bağlantısı opsiyonel - hata olsa da sayfa çalışmaya devam eder
+            isConnected = false;
+            _ = ex; // suppress warning
+        }
+    }
+
+    private async Task LoadLogs()
+    {
+        isLoading = true;
+        var (data, error) = await ApiService.GetActivityLogs(currentPage, pageSize);
+        isLoading = false;
+
+        if (error != null)
+            errorMessage = error;
+        else if (data != null)
+            activityLogs = data;
+    }
+
+    private async Task PreviousPage()
+    {
+        if (currentPage > 1)
+        {
+            currentPage--;
+            await LoadLogs();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        currentPage++;
+        await LoadLogs();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+}

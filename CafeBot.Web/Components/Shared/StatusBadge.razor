@@ -1,0 +1,47 @@
+@if (ConnectionStatus.HasValue)
+{
+    <span class="badge @GetConnectionBadgeClass()">@GetConnectionLabel()</span>
+}
+else if (SystemStatus.HasValue)
+{
+    <span class="badge @GetSystemBadgeClass()">@GetSystemLabel()</span>
+}
+
+@code {
+    [Parameter] public ConnectionStatus? ConnectionStatus { get; set; }
+    [Parameter] public SystemStatus? SystemStatus { get; set; }
+
+    private string GetConnectionBadgeClass() => ConnectionStatus switch
+    {
+        CafeBot.Data.Enums.ConnectionStatus.Connected    => "bg-success",
+        CafeBot.Data.Enums.ConnectionStatus.Connecting   => "bg-warning text-dark",
+        CafeBot.Data.Enums.ConnectionStatus.Disconnected => "bg-secondary",
+        CafeBot.Data.Enums.ConnectionStatus.Error        => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private string GetConnectionLabel() => ConnectionStatus switch
+    {
+        CafeBot.Data.Enums.ConnectionStatus.Connected    => "Bağlı",
+        CafeBot.Data.Enums.ConnectionStatus.Connecting   => "Bağlanıyor...",
+        CafeBot.Data.Enums.ConnectionStatus.Disconnected => "Bağlı Değil",
+        CafeBot.Data.Enums.ConnectionStatus.Error        => "Hata",
+        _ => "Bilinmiyor"
+    };
+
+    private string GetSystemBadgeClass() => SystemStatus switch
+    {
+        CafeBot.Data.Enums.SystemStatus.Running => "bg-success",
+        CafeBot.Data.Enums.SystemStatus.Stopped => "bg-secondary",
+        CafeBot.Data.Enums.SystemStatus.Paused  => "bg-warning text-dark",
+        _ => "bg-secondary"
+    };
+
+    private string GetSystemLabel() => SystemStatus switch
+    {
+        CafeBot.Data.Enums.SystemStatus.Running => "Aktif",
+        CafeBot.Data.Enums.SystemStatus.Stopped => "Pasif",
+        CafeBot.Data.Enums.SystemStatus.Paused  => "Duraklatıldı",
+        _ => "Bilinmiyor"
+    };
+}

@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=evolution
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=evolution123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  evolution-api:
+    image: atendai/evolution-api:v1.8.7
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTHENTICATION_API_KEY=cafebot-local-test-key
+      - AUTHENTICATION_TYPE=apikey
+      - SERVER_PORT=8080
+      - STORE_MESSAGES=false
+      - STORE_MESSAGE_UP=false
+      - STORE_CONTACTS=false
+      - STORE_CHATS=false
+      # Cache (Redis only)
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://redis:6379
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_LOCAL_ENABLED=true
+    volumes:
+      - evolution_data:/evolution/instances
+    restart: unless-stopped
+
+  cafebot-api:
+    build:
+      context: .
+      dockerfile: CafeBot.API/Dockerfile
+    ports:
+      - "5000:8080"
+    environment:
+      - ConnectionStrings__DefaultConnection=Data Source=/app/data/cafebot.db
+      - EvolutionApi__BaseUrl=http://evolution-api:8080
+      - EvolutionApi__ApiKey=cafebot-local-test-key
+      - Gemini__ApiKey=${GEMINI_API_KEY}
+    volumes:
+      - api_data:/app/data
+    depends_on:
+      - evolution-api
+    restart: unless-stopped
+
+  cafebot-worker:
+    build:
+      context: .
+      dockerfile: CafeBot.Worker/Dockerfile
+    environment:
+      - ConnectionStrings__DefaultConnection=Data Source=/app/data/cafebot.db
+      - EvolutionApi__BaseUrl=http://evolution-api:8080
+      - EvolutionApi__ApiKey=cafebot-local-test-key
+      - Gemini__ApiKey=${GEMINI_API_KEY}
+      - ApiBaseUrl=http://cafebot-api:8080
+    volumes:
+      - api_data:/app/data
+    depends_on:
+      - evolution-api
+      - cafebot-api
+    restart: unless-stopped
+
+  cafebot-web:
+    build:
+      context: .
+      dockerfile: CafeBot.Web/Dockerfile
+    ports:
+      - "80:8080"
+    environment:
+      - ApiBaseUrl=http://cafebot-api:8080
+    depends_on:
+      - cafebot-api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_data:
+  api_data:

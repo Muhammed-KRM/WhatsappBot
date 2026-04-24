@@ -1,0 +1,21 @@
+@if (!string.IsNullOrEmpty(Base64Image))
+{
+    <div class="text-center my-3">
+        @{
+            // Evolution API v2 zaten "data:image/png;base64,..." formatında döndürüyor
+            // Eğer prefix yoksa ekle
+            var imgSrc = Base64Image.StartsWith("data:")
+                ? Base64Image
+                : $"data:image/png;base64,{Base64Image}";
+        }
+        <img src="@imgSrc"
+             alt="WhatsApp QR Kodu"
+             class="img-fluid border rounded p-2"
+             style="max-width: 300px;" />
+        <p class="text-muted mt-2 small">QR kodu WhatsApp uygulamanızla tarayın</p>
+    </div>
+}
+
+@code {
+    [Parameter] public string? Base64Image { get; set; }
+}
