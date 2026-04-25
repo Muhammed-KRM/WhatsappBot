@@ -37,25 +37,6 @@ public class GeminiClient
     private const int MaxRequestsPerMinute = 15;
     private static readonly TimeSpan RateLimitWindow = TimeSpan.FromMinutes(1);
 
-    // Prompt template for parsing shift messages
-    private const string ShiftParsePrompt = @"Bu WhatsApp mesajından vardiya saatlerini ve kişi sayılarını çıkar.
-Mesaj: '{0}'
-
-Yanıtı sadece JSON formatında ver, başka açıklama ekleme:
-{{
-  ""isShiftMessage"": true/false,
-  ""slots"": [
-    {{ ""hour"": 18, ""personCount"": 3 }},
-    {{ ""hour"": 19, ""personCount"": 5 }}
-  ]
-}}
-
-Kurallar:
-- Eğer mesaj vardiya/saat bilgisi içermiyorsa isShiftMessage: false dön
-- Saat değerleri 0-23 arası tam sayı olmalı
-- Kişi sayısı pozitif tam sayı olmalı
-- Sadece geçerli JSON dön, başka metin ekleme";
-
     public GeminiClient(HttpClient httpClient, string baseUrl, string apiKey, string model)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -76,7 +57,7 @@ Kurallar:
     /// <param name="prompt">The prompt text to send to Gemini</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Response from Gemini API</returns>
-    public async Task<GeminiResponse> GenerateContentAsync(string prompt, CancellationToken cancellationToken = default)
+    public async Task<GeminiResponse> GenerateContentAsync(string prompt, string? apiKeyOverride = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(prompt))
             throw new ArgumentException("Prompt cannot be empty", nameof(prompt));
@@ -103,7 +84,8 @@ Kurallar:
             }
         };
 
-        var endpoint = $"/models/{_model}:generateContent?key={_apiKey}";
+        var keyToUse = string.IsNullOrWhiteSpace(apiKeyOverride) ? _apiKey : apiKeyOverride;
+        var endpoint = $"/models/{_model}:generateContent?key={keyToUse}";
         var response = await RetryPipeline.ExecuteAsync(
             async ct => await _httpClient.PostAsJsonAsync(endpoint, request, ct),
             cancellationToken);
@@ -113,21 +95,42 @@ Kurallar:
         return result ?? throw new InvalidOperationException("Failed to deserialize GeminiResponse");
     }
 
+    public const string DefaultShiftParsePrompt = @"Bu WhatsApp mesajından vardiya saatlerini ve kişi sayılarını çıkar.
+Mesaj: '{0}'
+
+Yanıtı sadece JSON formatında ver, başka açıklama ekleme:
+{{
+  ""isShiftMessage"": true/false,
+  ""slots"": [
+    {{ ""hour"": 18, ""personCount"": 3 }},
+    {{ ""hour"": 19, ""personCount"": 5 }}
+  ]
+}}
+
+Kurallar:
+- Eğer mesaj vardiya/saat bilgisi içermiyorsa isShiftMessage: false dön
+- Saat değerleri 0-23 arası tam sayı olmalı
+- Kişi sayısı pozitif tam sayı olmalı
+- Sadece geçerli JSON dön, başka metin ekleme";
+
     /// <summary>
     /// Parses a WhatsApp message to extract shift information
     /// </summary>
     /// <param name="messageText">The WhatsApp message text</param>
+    /// <param name="apiKeyOverride">Optional custom API key for the user</param>
+    /// <param name="aiSystemPromptOverride">Optional custom AI prompt</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Parsed shift information or null if parsing fails</returns>
-    public async Task<ShiftParseResult?> ParseShiftMessageAsync(string messageText, CancellationToken cancellationToken = default)
+    public async Task<ShiftParseResult?> ParseShiftMessageAsync(string messageText, string? apiKeyOverride = null, string? aiSystemPromptOverride = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(messageText))
             return null;
 
         try
         {
-            var prompt = string.Format(ShiftParsePrompt, messageText);
-            var response = await GenerateContentAsync(prompt, cancellationToken);
+            var promptTemplate = string.IsNullOrWhiteSpace(aiSystemPromptOverride) ? DefaultShiftParsePrompt : aiSystemPromptOverride;
+            var prompt = string.Format(promptTemplate, messageText);
+            var response = await GenerateContentAsync(prompt, apiKeyOverride, cancellationToken);
 
             // Extract text from response
             var responseText = response.Candidates?.FirstOrDefault()?.Content?.Parts?.FirstOrDefault()?.Text;
@@ -160,41 +163,38 @@ Kurallar:
         await _rateLimiter.WaitAsync(cancellationToken);
         try
         {
-            lock (_lock)
+            var now = DateTime.UtcNow;
+            var windowStart = now - RateLimitWindow;
+
+            // Remove timestamps outside the current window
+            while (_requestTimestamps.Count > 0 && _requestTimestamps.Peek() < windowStart)
             {
-                var now = DateTime.UtcNow;
-                var windowStart = now - RateLimitWindow;
+                _requestTimestamps.Dequeue();
+            }
 
-                // Remove timestamps outside the current window
-                while (_requestTimestamps.Count > 0 && _requestTimestamps.Peek() < windowStart)
+            // If we've hit the limit, calculate wait time
+            if (_requestTimestamps.Count >= MaxRequestsPerMinute)
+            {
+                var oldestRequest = _requestTimestamps.Peek();
+                var waitTime = oldestRequest.Add(RateLimitWindow) - now;
+                
+                if (waitTime > TimeSpan.Zero)
                 {
-                    _requestTimestamps.Dequeue();
-                }
-
-                // If we've hit the limit, calculate wait time
-                if (_requestTimestamps.Count >= MaxRequestsPerMinute)
-                {
-                    var oldestRequest = _requestTimestamps.Peek();
-                    var waitTime = oldestRequest.Add(RateLimitWindow) - now;
+                    // Wait until the oldest request expires asynchronusly
+                    await Task.Delay(waitTime, cancellationToken);
                     
-                    if (waitTime > TimeSpan.Zero)
+                    // Clean up again after waiting
+                    now = DateTime.UtcNow;
+                    windowStart = now - RateLimitWindow;
+                    while (_requestTimestamps.Count > 0 && _requestTimestamps.Peek() < windowStart)
                     {
-                        // Wait until the oldest request expires
-                        Thread.Sleep(waitTime);
-                        
-                        // Clean up again after waiting
-                        now = DateTime.UtcNow;
-                        windowStart = now - RateLimitWindow;
-                        while (_requestTimestamps.Count > 0 && _requestTimestamps.Peek() < windowStart)
-                        {
-                            _requestTimestamps.Dequeue();
-                        }
+                        _requestTimestamps.Dequeue();
                     }
                 }
-
-                // Record this request
-                _requestTimestamps.Enqueue(now);
             }
+
+            // Record this request
+            _requestTimestamps.Enqueue(now);
         }
         finally
         {

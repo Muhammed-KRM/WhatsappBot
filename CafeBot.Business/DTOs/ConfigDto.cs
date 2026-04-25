@@ -6,9 +6,10 @@ public record ConfigDto
 {
     public string? SessionId { get; init; }
     public ConnectionStatus ConnectionStatus { get; init; }
-    public string? TargetGroupId { get; init; }
-    public string? TargetGroupName { get; init; }
+    public List<string> TargetGroupIds { get; init; } = new();
+    public List<string> TargetGroupNames { get; init; } = new();
     public List<int> PriorityList { get; init; } = new();
+    public string? AiSystemPrompt { get; init; }
     public SystemStatus SystemStatus { get; init; }
     public DateTime LastUpdated { get; init; }
 }

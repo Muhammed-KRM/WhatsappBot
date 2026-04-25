@@ -1,11 +1,12 @@
 @page "/priority"
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CafeBot.Business.DTOs
 @inject ApiService ApiService
 
-<PageTitle>Öncelik Sırası</PageTitle>
+<PageTitle>Oncelik Sirasi</PageTitle>
 
 <div class="container" style="max-width: 600px;">
-    <h2 class="mb-4">⚙️ Öncelik Sırası</h2>
+    <h2 class="mb-4">⚙️ Grup Bazli Oncelik Sirasi</h2>
 
     @if (!string.IsNullOrEmpty(errorMessage))
     {
@@ -26,98 +27,189 @@
     @if (duplicateWarning)
     {
         <div class="alert alert-warning">
-            ⚠️ Aynı saat değeri birden fazla kez eklenemez.
+            ⚠️ Ayni saat degeri birden fazla kez eklenemez.
         </div>
     }
 
-    <div class="card">
+    <div class="card mb-4">
         <div class="card-body">
-            <h5 class="card-title">Saat Öncelik Listesi</h5>
-            <p class="text-muted small">
-                Sistem, vardiya mesajlarındaki saatleri bu sıraya göre değerlendirir.
-                En üstteki saat en yüksek önceliğe sahiptir.
-            </p>
-
-            @if (isLoading)
-            {
-                <div class="text-center py-3">
-                    <div class="spinner-border text-primary"></div>
-                </div>
-            }
-            else
-            {
-                @if (priorityList.Count == 0)
+            <h5 class="card-title">Grup Secimi</h5>
+            <p class="text-muted small">Ayarlarini duzenlemek istediginiz grubu secin.</p>
+            
+            <select class="form-select" @onchange="OnGroupSelected">
+                <option value="" selected="@string.IsNullOrEmpty(selectedGroupId)">-- Seciniz --</option>
+                @for(int i=0; i<targetGroupIds.Count; i++)
                 {
-                    <p class="text-muted fst-italic">Henüz saat eklenmedi.</p>
+                    var id = targetGroupIds[i];
+                    var name = targetGroupNames.Count > i ? targetGroupNames[i] : id;
+                    <option value="@id" selected="@(selectedGroupId == id)">@name</option>
                 }
-
-                @for (int i = 0; i < priorityList.Count; i++)
-                {
-                    var index = i;
-                    <div class="d-flex align-items-center gap-2 mb-2">
-                        <span class="badge bg-primary" style="min-width: 28px;">@(i + 1)</span>
-                        <input type="number"
-                               class="form-control"
-                               style="max-width: 100px;"
-                               min="0"
-                               max="23"
-                               value="@priorityList[index]"
-                               @onchange="e => OnHourChanged(index, e)" />
-                        <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveHour(index)">
-                            🗑️
-                        </button>
-                        @if (index > 0)
-                        {
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveUp(index)" title="Yukarı taşı">
-                                ↑
-                            </button>
-                        }
-                        @if (index < priorityList.Count - 1)
-                        {
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveDown(index)" title="Aşağı taşı">
-                                ↓
-                            </button>
-                        }
-                    </div>
-                }
-
-                <div class="d-flex gap-2 mt-3">
-                    <button class="btn btn-outline-primary" @onclick="AddHour">
-                        ➕ Saat Ekle
-                    </button>
-                    <button class="btn btn-primary"
-                            @onclick="SavePriority"
-                            disabled="@(priorityList.Count == 0 || isSaving || duplicateWarning)">
-                        @if (isSaving)
-                        {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
-                        }
-                        Kaydet
-                    </button>
+            </select>
+            
+            @if (targetGroupIds.Count == 0)
+            {
+                <div class="alert alert-info mt-2 mb-0 small">
+                    <i class="bi bi-info-circle"></i> Oncelikle "Grup Secimi" sayfasindan botun islem yapacagi gruplari secmelisiniz.
                 </div>
             }
         </div>
     </div>
+
+    @if (!string.IsNullOrEmpty(selectedGroupId))
+    {
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Saat Oncelik Listesi (@selectedGroupName)</h5>
+                <p class="text-muted small">
+                    Bu grup icin, vardiya mesajlarindaki saatler asagidaki siraya gore degerlendirilir.
+                    En ustteki saat en yuksek oncelige sahiptir.
+                </p>
+
+                @if (isLoading)
+                {
+                    <div class="text-center py-3">
+                        <div class="spinner-border text-primary"></div>
+                    </div>
+                }
+                else
+                {
+                    @if (priorityList.Count == 0)
+                    {
+                        <p class="text-muted fst-italic">Henuz saat eklenmedi.</p>
+                    }
+
+                    @for (int i = 0; i < priorityList.Count; i++)
+                    {
+                        var index = i;
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <span class="badge bg-primary" style="min-width: 28px;">@(i + 1)</span>
+                            <input type="number"
+                                   class="form-control"
+                                   style="max-width: 100px;"
+                                   min="0"
+                                   max="23"
+                                   value="@priorityList[index]"
+                                   @onchange="e => OnHourChanged(index, e)" />
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveHour(index)">
+                                🗑️
+                            </button>
+                            @if (index > 0)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveUp(index)" title="Yukari tasi">
+                                    ↑
+                                </button>
+                            }
+                            @if (index < priorityList.Count - 1)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveDown(index)" title="Asagi tasi">
+                                    ↓
+                                </button>
+                            }
+                        </div>
+                    }
+
+                    <div class="d-flex gap-2 mt-3">
+                        <button class="btn btn-outline-primary" @onclick="AddHour">
+                            ➕ Saat Ekle
+                        </button>
+                        <button class="btn btn-primary"
+                                @onclick="SavePriority"
+                                disabled="@(priorityList.Count == 0 || isSaving || duplicateWarning)">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            Kaydet
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    }
 </div>
 
 @code {
+    private List<string> targetGroupIds = new();
+    private List<string> targetGroupNames = new();
+    
+    private string? selectedGroupId;
+    private string selectedGroupName = "";
+
     private List<int> priorityList = new();
+    
     private string? errorMessage;
     private string? successMessage;
     private bool duplicateWarning;
     private bool isLoading;
     private bool isSaving;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadInitialData();
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadInitialData()
     {
         isLoading = true;
         var (config, error) = await ApiService.GetConfig();
         isLoading = false;
 
         if (error != null)
+        {
             errorMessage = error;
+        }
         else if (config != null)
-            priorityList = new List<int>(config.PriorityList);
+        {
+            targetGroupIds = config.TargetGroupIds ?? new();
+            targetGroupNames = config.TargetGroupNames ?? new();
+            
+            // Eğer sadece 1 grup varsa otomatik seç
+            if (targetGroupIds.Count == 1)
+            {
+                await SelectGroup(targetGroupIds[0]);
+            }
+        }
+    }
+
+    private async Task OnGroupSelected(ChangeEventArgs e)
+    {
+        var groupId = e.Value?.ToString();
+        await SelectGroup(groupId);
+    }
+    
+    private async Task SelectGroup(string? groupId)
+    {
+        selectedGroupId = groupId;
+        errorMessage = null;
+        successMessage = null;
+        
+        if (string.IsNullOrEmpty(groupId))
+        {
+            priorityList.Clear();
+            return;
+        }
+        
+        var index = targetGroupIds.IndexOf(groupId);
+        selectedGroupName = index >= 0 && index < targetGroupNames.Count ? targetGroupNames[index] : groupId;
+
+        isLoading = true;
+        var (groupSettings, error) = await ApiService.GetGroupSettings(groupId);
+        isLoading = false;
+        
+        if (error != null)
+        {
+            errorMessage = error;
+            priorityList = new();
+        }
+        else if (groupSettings != null)
+        {
+            priorityList = new List<int>(groupSettings.PriorityList);
+            CheckDuplicates();
+        }
     }
 
     private void OnHourChanged(int index, ChangeEventArgs e)
@@ -132,7 +224,6 @@
 
     private void AddHour()
     {
-        // Find a value not already in the list
         for (int h = 0; h <= 23; h++)
         {
             if (!priorityList.Contains(h))
@@ -142,7 +233,6 @@
                 return;
             }
         }
-        // All hours used
         priorityList.Add(0);
         CheckDuplicates();
     }
@@ -172,18 +262,19 @@
 
     private async Task SavePriority()
     {
-        if (priorityList.Count == 0 || duplicateWarning) return;
+        if (string.IsNullOrEmpty(selectedGroupId) || priorityList.Count == 0 || duplicateWarning) return;
 
         isSaving = true;
         errorMessage = null;
         successMessage = null;
 
-        var error = await ApiService.UpdatePriority(priorityList);
+        var error = await ApiService.UpdateGroupPriority(selectedGroupId, priorityList);
         isSaving = false;
 
         if (error != null)
             errorMessage = error;
         else
-            successMessage = "Öncelik listesi başarıyla kaydedildi.";
+            successMessage = $"{selectedGroupName} icin oncelik listesi basariyla kaydedildi.";
     }
 }
+

@@ -48,6 +48,10 @@ services:
       - EvolutionApi__BaseUrl=http://evolution-api:8080
       - EvolutionApi__ApiKey=cafebot-local-test-key
       - Gemini__ApiKey=${GEMINI_API_KEY}
+      - Webhook__SecurityToken=${WEBHOOK_TOKEN}
+      - JwtSettings__Secret=CafeBotSuperSecretKey_Fixed_For_Production_Stability_2026
+      - JwtSettings__Issuer=CafeBotApi
+      - JwtSettings__Audience=CafeBotUsers
     volumes:
       - api_data:/app/data
     depends_on:
@@ -63,7 +67,11 @@ services:
       - EvolutionApi__BaseUrl=http://evolution-api:8080
       - EvolutionApi__ApiKey=cafebot-local-test-key
       - Gemini__ApiKey=${GEMINI_API_KEY}
+      - Webhook__SecurityToken=${WEBHOOK_TOKEN}
       - ApiBaseUrl=http://cafebot-api:8080
+      - JwtSettings__Secret=CafeBotSuperSecretKey_Fixed_For_Production_Stability_2026
+      - JwtSettings__Issuer=CafeBotApi
+      - JwtSettings__Audience=CafeBotUsers
     volumes:
       - api_data:/app/data
     depends_on:

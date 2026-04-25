@@ -5,9 +5,10 @@ namespace CafeBot.Data.Entities;
 /// Her mesaj için TraceId ile gruplandırılmış adımlar (StepOrder) saklanır.
 /// VS breakpoint mantığıyla: her fonksiyonda ne girdi, ne çıktı loglanır.
 /// </summary>
-public class ProcessLog
+public class ProcessLog : ITenantEntity
 {
     public int Id { get; set; }
+    public string UserId { get; set; } = string.Empty;
 
     /// <summary>Aynı mesajın tüm adımlarını gruplar (genelde MessageId)</summary>
     public string TraceId { get; set; } = string.Empty;

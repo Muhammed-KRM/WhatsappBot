@@ -1,6 +1,8 @@
 using System.Net.Http.Json;
 using CafeBot.Business.DTOs;
 using CafeBot.Data.Enums;
+using CafeBot.Web.Auth;
+using System.Net.Http.Headers;
 
 namespace CafeBot.Web.Services;
 
@@ -8,11 +10,118 @@ public class ApiService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<ApiService> _logger;
+    private readonly TokenAuthenticationStateProvider _authStateProvider;
 
-    public ApiService(HttpClient httpClient, ILogger<ApiService> logger)
+    // Grup istek deduplication: aktif istek varsa tekrar atma
+    private Task<(List<GroupDto>? Data, string? Error)>? _activeGroupFetch;
+
+    public ApiService(HttpClient httpClient, ILogger<ApiService> logger, TokenAuthenticationStateProvider authStateProvider)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _authStateProvider = authStateProvider;
+    }
+
+    private async Task EnsureAuthHeader()
+    {
+        var token = await _authStateProvider.GetTokenAsync();
+        if (!string.IsNullOrEmpty(token))
+        {
+            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
+    }
+
+    public async Task<(AuthResponseDto? Data, string? Error)> LoginAsync(LoginRequestDto request)
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.PostAsJsonAsync("api/auth/login", request);
+            if (response.IsSuccessStatusCode)
+            {
+                var data = await response.Content.ReadFromJsonAsync<AuthResponseDto>();
+                return (data, null);
+            }
+            var errorBody = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+            var errorMessage = errorBody != null && errorBody.ContainsKey("message") ? errorBody["message"] : "Giriş başarısız.";
+            return (null, errorMessage);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Login failed");
+            return (null, $"Giriş yapılamadı: {ex.Message}");
+        }
+    }
+
+    public async Task<(AuthResponseDto? Data, string? Error)> RegisterAsync(RegisterRequestDto request)
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.PostAsJsonAsync("api/auth/register", request);
+            if (response.IsSuccessStatusCode)
+            {
+                var data = await response.Content.ReadFromJsonAsync<AuthResponseDto>();
+                return (data, null);
+            }
+            // Hata mesajını düzgün parse etmeyi deneriz
+            var errorStr = await response.Content.ReadAsStringAsync();
+            return (null, $"Kayıt başarısız: {errorStr}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Register failed");
+            return (null, $"Kayıt yapılamadı: {ex.Message}");
+        }
+    }
+
+    public async Task<(UserProfileDto? Data, string? Error)> GetProfileAsync()
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync("api/user/profile");
+            if (response.IsSuccessStatusCode)
+            {
+                var data = await response.Content.ReadFromJsonAsync<UserProfileDto>();
+                return (data, null);
+            }
+            return (null, $"Profil alınamadı: {response.StatusCode}");
+        }
+        catch (Exception ex)
+        {
+            return (null, $"Profil alınamadı: {ex.Message}");
+        }
+    }
+
+    public async Task<(bool Success, string? Error)> UpdateProfileAsync(UpdateUserProfileDto dto)
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync("api/user/profile", dto);
+            if (response.IsSuccessStatusCode)
+                return (true, null);
+                
+            return (false, $"Güncelleme başarısız: {response.StatusCode}");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Güncelleme hatası: {ex.Message}");
+        }
+    }
+
+    public async Task<(bool Success, string? Error)> DeleteAccountAsync()
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.DeleteAsync("api/user/account");
+            if (response.IsSuccessStatusCode)
+                return (true, null);
+                
+            var error = await response.Content.ReadAsStringAsync();
+            return (false, $"Hesap silinemedi: {response.StatusCode} - {error}");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Hesap silme hatası: {ex.Message}");
+        }
     }
 
     public async Task<(QRCodeDto? Data, string? Error)> ConnectWhatsApp()
@@ -39,7 +148,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.GetAsync("api/whatsapp/status");
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync("api/whatsapp/status");
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<ConnectionStatus>();
@@ -55,11 +164,24 @@ public class ApiService
         }
     }
 
-    public async Task<(List<GroupDto>? Data, string? Error)> GetGroups()
+    public async Task<(List<GroupDto>? Data, string? Error)> GetGroups(bool forceRefresh = false)
+    {
+        // Aktif istek varsa ve force değilse, mevcut isteği bekle (dedup)
+        if (!forceRefresh && _activeGroupFetch != null && !_activeGroupFetch.IsCompleted)
+        {
+            return await _activeGroupFetch;
+        }
+
+        _activeGroupFetch = FetchGroupsInternal(forceRefresh);
+        return await _activeGroupFetch;
+    }
+
+    private async Task<(List<GroupDto>? Data, string? Error)> FetchGroupsInternal(bool forceRefresh)
     {
         try
         {
-            var response = await _httpClient.GetAsync("api/whatsapp/groups");
+            var url = forceRefresh ? "api/whatsapp/groups?forceRefresh=true" : "api/whatsapp/groups";
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync(url);
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<List<GroupDto>>();
@@ -75,11 +197,11 @@ public class ApiService
         }
     }
 
-    public async Task<string?> UpdateGroup(string groupId, string groupName)
+    public async Task<string?> UpdateGroups(List<string> groupIds, List<string> groupNames)
     {
         try
         {
-            var response = await _httpClient.PutAsJsonAsync("api/config/group", new { GroupId = groupId, GroupName = groupName });
+            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync("api/config/group", new { GroupIds = groupIds, GroupNames = groupNames });
             if (response.IsSuccessStatusCode)
                 return null;
             var error = await response.Content.ReadAsStringAsync();
@@ -87,8 +209,25 @@ public class ApiService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "UpdateGroup failed");
+            _logger.LogError(ex, "UpdateGroups failed");
             return $"Grup kaydedilemedi: {ex.Message}";
+        }
+    }
+
+    public async Task<string?> UpdateAiPrompt(string? prompt)
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync("api/config/ai-prompt", new { Prompt = prompt });
+            if (response.IsSuccessStatusCode)
+                return null;
+            var error = await response.Content.ReadAsStringAsync();
+            return $"AI komutu kaydedilemedi: {response.StatusCode} - {error}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "UpdateAiPrompt failed");
+            return $"AI komutu kaydedilemedi: {ex.Message}";
         }
     }
 
@@ -96,7 +235,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.PutAsJsonAsync("api/config/priority", priorityList);
+            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync("api/config/priority", priorityList);
             if (response.IsSuccessStatusCode)
                 return null;
             var error = await response.Content.ReadAsStringAsync();
@@ -109,11 +248,65 @@ public class ApiService
         }
     }
 
+    public async Task<(GroupSettingsDto? Data, string? Error)> GetGroupSettings(string groupId)
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync($"api/config/group-settings/{groupId}");
+            if (response.IsSuccessStatusCode)
+            {
+                var data = await response.Content.ReadFromJsonAsync<GroupSettingsDto>();
+                return (data, null);
+            }
+            var error = await response.Content.ReadAsStringAsync();
+            return (null, $"Grup ayarları alınamadı: {response.StatusCode} - {error}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetGroupSettings failed");
+            return (null, $"Grup ayarları alınamadı: {ex.Message}");
+        }
+    }
+
+    public async Task<string?> UpdateGroupPriority(string groupId, List<int> priorityList)
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync($"api/config/group-settings/{groupId}/priority", priorityList);
+            if (response.IsSuccessStatusCode)
+                return null;
+            var error = await response.Content.ReadAsStringAsync();
+            return $"Grup öncelik listesi kaydedilemedi: {response.StatusCode} - {error}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "UpdateGroupPriority failed");
+            return $"Grup öncelik listesi kaydedilemedi: {ex.Message}";
+        }
+    }
+
+    public async Task<string?> UpdateGroupAiPrompt(string groupId, string? prompt)
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync($"api/config/group-settings/{groupId}/ai-prompt", new { Prompt = prompt });
+            if (response.IsSuccessStatusCode)
+                return null;
+            var error = await response.Content.ReadAsStringAsync();
+            return $"Grup AI komutu kaydedilemedi: {response.StatusCode} - {error}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "UpdateGroupAiPrompt failed");
+            return $"Grup AI komutu kaydedilemedi: {ex.Message}";
+        }
+    }
+
     public async Task<string?> UpdateSystemStatus(SystemStatus status)
     {
         try
         {
-            var response = await _httpClient.PutAsJsonAsync("api/config/system-status", status);
+            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync("api/config/system-status", status);
             if (response.IsSuccessStatusCode)
                 return null;
             var error = await response.Content.ReadAsStringAsync();
@@ -130,7 +323,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.GetAsync($"api/activity/logs?page={page}&pageSize={pageSize}");
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync($"api/activity/logs?page={page}&pageSize={pageSize}");
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<List<ActivityLogDto>>();
@@ -150,7 +343,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.GetAsync("api/config");
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync("api/config");
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<ConfigDto>();
@@ -163,6 +356,30 @@ public class ApiService
         {
             _logger.LogError(ex, "GetConfig failed");
             return (null, $"Yapılandırma alınamadı: {ex.Message}");
+        }
+    }
+
+    public async Task<(List<UserAdminDto>? Data, string? Error, bool Success)> GetAdminUsersAsync()
+    {
+        try
+        {
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync("api/superadmin/users");
+            if (response.IsSuccessStatusCode)
+            {
+                var data = await response.Content.ReadFromJsonAsync<List<UserAdminDto>>();
+                return (data, null, true);
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Forbidden || response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                return (null, "Bu sayfayı görüntüleme yetkiniz yok.", false);
+            }
+            var error = await response.Content.ReadAsStringAsync();
+            return (null, $"Kullanıcılar alınamadı: {response.StatusCode} - {error}", false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetAdminUsersAsync failed");
+            return (null, $"Kullanıcılar alınamadı: {ex.Message}", false);
         }
     }
 
@@ -191,7 +408,7 @@ public class ApiService
         {
             var url = $"api/log/endpoints?page={page}&pageSize={pageSize}";
             if (statusCode.HasValue) url += $"&statusCode={statusCode}";
-            var response = await _httpClient.GetAsync(url);
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync(url);
             if (response.IsSuccessStatusCode)
                 return (await response.Content.ReadFromJsonAsync<EndpointLogsResponse>(), null);
             return (null, $"Loglar alınamadı: {response.StatusCode}");
@@ -207,7 +424,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.GetAsync($"api/log/functions?page={page}&pageSize={pageSize}");
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync($"api/log/functions?page={page}&pageSize={pageSize}");
             if (response.IsSuccessStatusCode)
                 return (await response.Content.ReadFromJsonAsync<FunctionLogsResponse>(), null);
             return (null, $"Hata logları alınamadı: {response.StatusCode}");
@@ -223,7 +440,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.GetAsync("api/log/stats");
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync("api/log/stats");
             if (response.IsSuccessStatusCode)
                 return (await response.Content.ReadFromJsonAsync<LogStatsDto>(), null);
             return (null, $"İstatistikler alınamadı: {response.StatusCode}");
@@ -241,7 +458,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.GetAsync($"api/log/process?page={page}&pageSize={pageSize}");
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync($"api/log/process?page={page}&pageSize={pageSize}");
             if (response.IsSuccessStatusCode)
                 return (await response.Content.ReadFromJsonAsync<ProcessLogsResponse>(), null);
             return (null, $"Süreç logları alınamadı: {response.StatusCode}");
@@ -257,7 +474,7 @@ public class ApiService
     {
         try
         {
-            var response = await _httpClient.GetAsync($"api/log/process/{traceId}");
+            await EnsureAuthHeader(); var response = await _httpClient.GetAsync($"api/log/process/{traceId}");
             if (response.IsSuccessStatusCode)
                 return (await response.Content.ReadFromJsonAsync<List<ProcessLogDto>>(), null);
             return (null, $"Trace detayı alınamadı: {response.StatusCode}");

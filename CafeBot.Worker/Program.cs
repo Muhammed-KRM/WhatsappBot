@@ -65,19 +65,7 @@ builder.Services.AddHostedService<WhatsAppListenerService>();
 
 var host = builder.Build();
 
-// Veritabanı migration'larını uygula
-using (var scope = host.Services.CreateScope())
-{
-    try
-    {
-        var dbContext = scope.ServiceProvider.GetRequiredService<CafeBot.Data.Context.AppDbContext>();
-        await dbContext.Database.EnsureCreatedAsync();
-    }
-    catch (Exception ex)
-    {
-        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "Veritabanı başlatılırken hata oluştu");
-    }
-}
+// Veritabanı migration işlemlerini API projesi (CafeBot.API) üstlenmektedir.
+// Worker projesinde veritabanı oluşturma işlemi yapılmayacaktır (EnsureCreated/Migrate çakışmasını önlemek için).
 
 host.Run();

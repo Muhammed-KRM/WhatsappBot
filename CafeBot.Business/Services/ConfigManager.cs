@@ -11,11 +11,13 @@ namespace CafeBot.Business.Services;
 public class ConfigManager : IConfigService
 {
     private readonly IConfigRepository _configRepository;
+    private readonly IGroupSettingsRepository _groupSettingsRepository;
     private readonly ILogger<ConfigManager> _logger;
 
-    public ConfigManager(IConfigRepository configRepository, ILogger<ConfigManager> logger)
+    public ConfigManager(IConfigRepository configRepository, IGroupSettingsRepository groupSettingsRepository, ILogger<ConfigManager> logger)
     {
         _configRepository = configRepository;
+        _groupSettingsRepository = groupSettingsRepository;
         _logger = logger;
     }
 
@@ -32,8 +34,8 @@ public class ConfigManager : IConfigService
                 {
                     SessionId = null,
                     ConnectionStatus = ConnectionStatus.Disconnected,
-                    TargetGroupId = null,
-                    TargetGroupName = null,
+                    TargetGroupIds = new List<string>(),
+                    TargetGroupNames = new List<string>(),
                     PriorityList = new List<int>(),
                     SystemStatus = SystemStatus.Stopped,
                     LastUpdated = DateTime.UtcNow
@@ -49,23 +51,23 @@ public class ConfigManager : IConfigService
         }
     }
 
-    public async Task UpdateTargetGroupAsync(string groupId, string groupName)
+    public async Task UpdateTargetGroupsAsync(List<string> groupIds, List<string> groupNames)
     {
         try
         {
             var config = await GetOrCreateConfigurationAsync();
 
-            config.TargetGroupId = groupId;
-            config.TargetGroupName = groupName;
+            config.TargetGroupIdsJson = JsonSerializer.Serialize(groupIds);
+            config.TargetGroupNamesJson = JsonSerializer.Serialize(groupNames);
             config.LastUpdated = DateTime.UtcNow;
 
             _configRepository.Update(config);
             await _configRepository.SaveChangesAsync();
-            _logger.LogInformation("Hedef grup güncellendi. GroupId: {GroupId}, GroupName: {GroupName}", groupId, groupName);
+            _logger.LogInformation("Hedef gruplar güncellendi. Sayı: {Count}", groupIds.Count);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Hedef grup güncellenirken hata oluştu. GroupId: {GroupId}", groupId);
+            _logger.LogError(ex, "Hedef gruplar güncellenirken hata oluştu.");
             throw;
         }
     }
@@ -164,6 +166,8 @@ public class ConfigManager : IConfigService
                 ConnectionStatus = ConnectionStatus.Disconnected,
                 SystemStatus = SystemStatus.Stopped,
                 PriorityListJson = "[]",
+                TargetGroupIdsJson = "[]",
+                TargetGroupNamesJson = "[]",
                 LastUpdated = DateTime.UtcNow
             };
 
@@ -176,27 +180,130 @@ public class ConfigManager : IConfigService
 
     private ConfigDto MapToDto(Configuration config)
     {
-        // Deserialize priority list from JSON
-        List<int> priorityList;
+        List<int> priorityList = new();
+        List<string> targetGroupIds = new();
+        List<string> targetGroupNames = new();
+        
         try
         {
             priorityList = JsonSerializer.Deserialize<List<int>>(config.PriorityListJson) ?? new List<int>();
+            targetGroupIds = JsonSerializer.Deserialize<List<string>>(config.TargetGroupIdsJson) ?? new List<string>();
+            targetGroupNames = JsonSerializer.Deserialize<List<string>>(config.TargetGroupNamesJson) ?? new List<string>();
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "Öncelik listesi JSON'dan ayrıştırılamadı, boş liste kullanılıyor.");
-            priorityList = new List<int>();
+            _logger.LogWarning(ex, "Konfigürasyon JSON ayrıştırılamadı, boş listeler kullanılıyor.");
         }
 
         return new ConfigDto
         {
             SessionId = config.SessionId,
             ConnectionStatus = config.ConnectionStatus,
-            TargetGroupId = config.TargetGroupId,
-            TargetGroupName = config.TargetGroupName,
+            TargetGroupIds = targetGroupIds,
+            TargetGroupNames = targetGroupNames,
             PriorityList = priorityList,
+            AiSystemPrompt = config.AiSystemPrompt,
             SystemStatus = config.SystemStatus,
             LastUpdated = config.LastUpdated
         };
+    }
+
+    public async Task UpdateAiPromptAsync(string? prompt)
+    {
+        try
+        {
+            var config = await GetOrCreateConfigurationAsync();
+            config.AiSystemPrompt = prompt;
+            config.LastUpdated = DateTime.UtcNow;
+
+            _configRepository.Update(config);
+            await _configRepository.SaveChangesAsync();
+            _logger.LogInformation("Özel AI komutu başarıyla güncellendi.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Özel AI komutu güncellenirken hata oluştu");
+            throw;
+        }
+    }
+
+    public async Task<GroupSettingsDto> GetGroupSettingsAsync(string groupId)
+    {
+        var settings = await _groupSettingsRepository.GetByGroupIdAsync(groupId);
+        if (settings == null)
+        {
+            // Default fallbacks from global config
+            var globalConfig = await GetConfigAsync();
+            return new GroupSettingsDto
+            {
+                GroupId = groupId,
+                GroupName = "", // we don't have the name here easily, but UI should have it
+                PriorityList = globalConfig.PriorityList,
+                AiSystemPrompt = globalConfig.AiSystemPrompt
+            };
+        }
+
+        List<int> priorityList = new();
+        try
+        {
+            priorityList = JsonSerializer.Deserialize<List<int>>(settings.PriorityListJson) ?? new List<int>();
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "GroupSettings JSON ayrıştırılamadı.");
+        }
+
+        return new GroupSettingsDto
+        {
+            GroupId = settings.GroupId,
+            GroupName = settings.GroupName,
+            PriorityList = priorityList,
+            AiSystemPrompt = settings.AiSystemPrompt
+        };
+    }
+
+    public async Task UpdateGroupPriorityListAsync(string groupId, List<int> priorityList)
+    {
+        var settings = await _groupSettingsRepository.GetByGroupIdAsync(groupId);
+        if (settings == null)
+        {
+            settings = new GroupSettings
+            {
+                GroupId = groupId,
+                GroupName = "Unknown", // Will be updated if possible or leave it
+                PriorityListJson = JsonSerializer.Serialize(priorityList),
+                CreatedAt = DateTime.UtcNow
+            };
+            await _groupSettingsRepository.AddAsync(settings);
+        }
+        else
+        {
+            settings.PriorityListJson = JsonSerializer.Serialize(priorityList);
+            _groupSettingsRepository.Update(settings);
+        }
+        await _groupSettingsRepository.SaveChangesAsync();
+    }
+
+    public async Task UpdateGroupAiPromptAsync(string groupId, string? prompt)
+    {
+        var settings = await _groupSettingsRepository.GetByGroupIdAsync(groupId);
+        if (settings == null)
+        {
+            settings = new GroupSettings
+            {
+                GroupId = groupId,
+                GroupName = "Unknown",
+                PriorityListJson = "[]",
+                AiSystemPrompt = prompt,
+                CreatedAt = DateTime.UtcNow
+            };
+            await _groupSettingsRepository.AddAsync(settings);
+        }
+        else
+        {
+            settings.AiSystemPrompt = prompt;
+            _groupSettingsRepository.Update(settings);
+        }
+        await _groupSettingsRepository.SaveChangesAsync();
     }
 }

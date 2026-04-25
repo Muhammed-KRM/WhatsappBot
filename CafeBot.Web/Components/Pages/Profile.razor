@@ -1,0 +1,208 @@
+@page "/profile"
+@using CafeBot.Business.DTOs
+@using CafeBot.Web.Services
+@inject ApiService ApiService
+@inject IJSRuntime JS
+@inject Microsoft.AspNetCore.Components.NavigationManager NavigationManager
+
+<PageTitle>Profil ve Ayarlar - CafeBot</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3 mb-0 text-gray-800">Profil ve Ayarlar</h1>
+</div>
+
+@if (isLoading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Yükleniyor...</span>
+        </div>
+    </div>
+}
+else if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger">@errorMessage</div>
+}
+else if (profile != null)
+{
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Hesap Bilgileri</h6>
+                </div>
+                <div class="card-body">
+                    <EditForm Model="updateModel" OnValidSubmit="SaveProfile">
+                        <DataAnnotationsValidator />
+
+                        <div class="mb-3">
+                            <label class="form-label">E-Posta Adresi</label>
+                            <input type="text" class="form-control" value="@profile.Email" disabled />
+                            <small class="text-muted">E-posta adresi deðiþtirilemez.</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Þirket / Kafe Adý</label>
+                            <InputText class="form-control" @bind-Value="updateModel.CompanyName" placeholder="Kafe Adý A.Þ." />
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label">
+                                Özel Gemini API Anahtarý
+                                <span class="badge bg-info text-dark ms-2">Yapay Zeka</span>
+                            </label>
+                            <InputText type="password" class="form-control" @bind-Value="updateModel.PersonalGeminiApiKey" placeholder="AIzaSy..." />
+                            <small class="form-text text-muted">
+                                Yapay zeka ile vardiya mesajlarýný ayrýþtýrmak için Google AI Studio üzerinden aldýðýnýz ücretsiz API anahtarýný buraya girebilirsiniz.
+                            </small>
+                        </div>
+
+                        <div class="d-flex justify-content-end">
+                            <button type="submit" class="btn btn-primary" disabled="@isSaving">
+                                @if (isSaving)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                    <span>Kaydediliyor...</span>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-save me-2"></i>
+                                    <span>Deðiþiklikleri Kaydet</span>
+                                }
+                            </button>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+
+            <div class="card shadow mb-4 border-left-danger">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-danger">Tehlikeli Bölge</h6>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">Hesabýnýzý silmek kalýcý bir iþlemdir. Evolution API oturumunuz, WhatsApp senkronizasyonunuz ve tüm yapýlandýrmalarýnýz kalýcý olarak silinecektir.</p>
+                    <button class="btn btn-danger" @onclick="DeleteAccount" disabled="@isDeleting">
+                        @if (isDeleting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            <span>Siliniyor...</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-trash me-2"></i>
+                            <span>Hesabýmý Kalýcý Olarak Sil</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card shadow mb-4 border-left-info">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
+                                Bilgilendirme
+                            </div>
+                            <div class="mb-0 text-gray-800" style="font-size: 0.9rem;">
+                                Özel API anahtarý girmediðiniz takdirde sistemin varsayýlan kotalý anahtarý kullanýlýr. Daha hýzlý ve kesintisiz iþlem için kendi ücretsiz Gemini API anahtarýnýzý oluþturmanýz önerilir.
+                            </div>
+                            <div class="mt-3">
+                                <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn btn-sm btn-outline-info">
+                                    <i class="bi bi-box-arrow-up-right me-1"></i> API Key Al
+                                </a>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-info-circle fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool isLoading = true;
+    private bool isSaving = false;
+    private bool isDeleting = false;
+    private string? errorMessage;
+    private UserProfileDto? profile;
+    private UpdateUserProfileDto updateModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadProfile();
+    }
+
+    private async Task LoadProfile()
+    {
+        isLoading = true;
+        errorMessage = null;
+
+        var result = await ApiService.GetProfileAsync();
+        if (result.Data != null)
+        {
+            profile = result.Data;
+            updateModel = new UpdateUserProfileDto
+            {
+                CompanyName = profile.CompanyName,
+                PersonalGeminiApiKey = profile.PersonalGeminiApiKey
+            };
+        }
+        else
+        {
+            errorMessage = result.Error ?? "Profil bilgileri yüklenemedi.";
+        }
+
+        isLoading = false;
+    }
+
+    private async Task SaveProfile()
+    {
+        isSaving = true;
+        errorMessage = null;
+
+        var result = await ApiService.UpdateProfileAsync(updateModel);
+        
+        if (result.Success)
+        {
+            await JS.InvokeVoidAsync("alert", "Profil ayarlarýnýz baþarýyla güncellendi.");
+            await LoadProfile();
+        }
+        else
+        {
+            errorMessage = result.Error ?? "Profil güncellenirken bir hata oluþtu.";
+        }
+
+        isSaving = false;
+    }
+
+    private async Task DeleteAccount()
+    {
+        bool confirmed = await JS.InvokeAsync<bool>("confirm", "Hesabýnýzý, WhatsApp oturumunuzu ve tüm verilerinizi kalýcý olarak silmek istediðinize emin misiniz? Bu iþlem geri alýnamaz!");
+        if (!confirmed) return;
+
+        isDeleting = true;
+        StateHasChanged();
+
+        var result = await ApiService.DeleteAccountAsync();
+        
+        if (result.Success)
+        {
+            await JS.InvokeVoidAsync("alert", "Hesabýnýz baþarýyla silindi. Bizi tercih ettiðiniz için teþekkür ederiz.");
+            // Tokeni temizle ve logine yönlendir
+            await JS.InvokeVoidAsync("localStorage.removeItem", "authToken");
+            NavigationManager.NavigateTo("/login", true);
+        }
+        else
+        {
+            errorMessage = result.Error ?? "Hesabýnýz silinirken bir hata oluþtu.";
+            isDeleting = false;
+            StateHasChanged();
+        }
+    }
+}
+

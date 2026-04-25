@@ -1,5 +1,5 @@
 @page "/connection"
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @inject ApiService ApiService
 @inject IConfiguration Configuration
 
@@ -142,6 +142,8 @@
                 if (status.Value == ConnectionStatus.Connected)
                 {
                     qrCode = null;
+                    // Bağlantı kuruldu → grupları arka planda çek ve cache'e yaz
+                    _ = Task.Run(async () => await ApiService.GetGroups(forceRefresh: true));
                     break;
                 }
             }

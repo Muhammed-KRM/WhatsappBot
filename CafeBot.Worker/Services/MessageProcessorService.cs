@@ -98,12 +98,12 @@ public class MessageProcessorService
             _logger.LogInformation("Saat seçildi: {Hour}. MessageId: {MessageId}", selectedHour, message.MessageId);
 
             // 5. Sending
-            var targetGroupId = config.TargetGroupId;
+            var targetGroupId = message.GroupId;
             if (string.IsNullOrEmpty(targetGroupId))
             {
-                _logger.LogError("Hedef grup ID'si yapılandırılmamış. MessageId: {MessageId}", message.MessageId);
+                _logger.LogError("Hedef grup ID'si mesajda bulunamadı. MessageId: {MessageId}", message.MessageId);
                 await LogActivityAsync(ActivityType.Error,
-                    "Hedef grup yapılandırılmamış",
+                    "Hedef grup mesajda bulunamadı",
                     $"MessageId: {message.MessageId}");
                 return;
             }

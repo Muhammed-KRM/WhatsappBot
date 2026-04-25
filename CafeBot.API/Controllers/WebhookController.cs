@@ -6,6 +6,7 @@ using CafeBot.Data.Context;
 using CafeBot.Data.Entities;
 using CafeBot.Data.Enums;
 using CafeBot.Data.Repositories;
+using CafeBot.Data.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CafeBot.API.Controllers;
@@ -29,10 +30,17 @@ public class WebhookController : ControllerBase
     private static readonly HashSet<string> _processedIds = new();
     private static readonly object _lock = new();
 
-    public WebhookController(IServiceScopeFactory scopeFactory, ILogger<WebhookController> logger)
+    // Noisy Neighbor Koruma (Rate Limiting)
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime WindowStart, int Count)> _rateLimits = new();
+    private const int MaxRequestsPerSecondPerTenant = 5;
+
+    private readonly IConfiguration _configuration;
+
+    public WebhookController(IServiceScopeFactory scopeFactory, ILogger<WebhookController> logger, IConfiguration configuration)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -40,8 +48,38 @@ public class WebhookController : ControllerBase
     /// Mesaj geldiğinde Evolution API bu endpoint'e POST yapar.
     /// </summary>
     [HttpPost("whatsapp")]
-    public IActionResult ReceiveWhatsAppEvent([FromBody] JsonElement payload)
+    public IActionResult ReceiveWhatsAppEvent([FromQuery] string? token, [FromBody] JsonElement payload)
     {
+        // Güvenlik: Webhook Token Kontrolü
+        var expectedToken = _configuration["Webhook:SecurityToken"];
+        if (!string.IsNullOrEmpty(expectedToken) && token != expectedToken)
+        {
+            _logger.LogWarning("Webhook yetkisiz erişim denemesi reddedildi. Token uyumsuz veya eksik.");
+            return Unauthorized(new { error = "Invalid or missing token" });
+        }
+
+        // ── Gürültülü Komşu (Noisy Neighbor) Koruması ──
+        string instanceName = payload.TryGetProperty("instance", out var instEl) ? instEl.GetString() ?? "default" : "default";
+        var now = DateTime.UtcNow;
+
+        _rateLimits.AddOrUpdate(instanceName, 
+            _ => (now, 1), 
+            (_, current) => 
+            {
+                // 1 saniyelik pencere dolduysa sıfırla
+                if ((now - current.WindowStart).TotalSeconds > 1)
+                    return (now, 1);
+                
+                return (current.WindowStart, current.Count + 1);
+            });
+
+        if (_rateLimits.TryGetValue(instanceName, out var rateInfo) && rateInfo.Count > MaxRequestsPerSecondPerTenant)
+        {
+            _logger.LogWarning("Rate limit aşıldı! Instance: {InstanceName}. Mesaj yoksayılıyor.", instanceName);
+            // 429 döndürsek Evolution API retry yapabilir, bu da kuyruğu tıkar. O yüzden 200 dönüp yoksayıyoruz.
+            return Ok(new { status = "rate_limited" });
+        }
+
         // Webhook'u bekletmeden 200 dön (Evolution API zaman aşımına uğramasın)
         // Ancak arka planda sırayla işle
         _ = Task.Run(async () =>
@@ -122,6 +160,7 @@ public class WebhookController : ControllerBase
     private async Task ProcessSingleMessageAsync(JsonElement msgData, JsonElement payload)
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
+        var currentUserService = scope.ServiceProvider.GetRequiredService<ICurrentUserService>();
         var configService = scope.ServiceProvider.GetRequiredService<IConfigService>();
         var parserService = scope.ServiceProvider.GetRequiredService<IMessageParserService>();
         var schedulerService = scope.ServiceProvider.GetRequiredService<ISchedulerService>();
@@ -166,8 +205,24 @@ public class WebhookController : ControllerBase
             // ── STEP 1: Webhook Received ──
             var stepSw = Stopwatch.StartNew();
             string? eventType = payload.TryGetProperty("event", out var evEl) ? evEl.GetString() : "unknown";
-            string? instanceFromPayload = payload.TryGetProperty("instance", out var instEl) ? instEl.GetString() : null;
             
+            // ── Robust Instance Extraction ──
+            string? instanceFromPayload = null;
+            if (payload.TryGetProperty("instance", out var instEl))
+                instanceFromPayload = instEl.GetString();
+            else if (payload.TryGetProperty("instanceName", out var instanceNameEl))
+                instanceFromPayload = instanceNameEl.GetString();
+            else if (payload.TryGetProperty("data", out var dataEl2) && 
+                     dataEl2.TryGetProperty("instance", out var dataInstanceEl))
+                instanceFromPayload = dataInstanceEl.GetString();
+            
+            // Eğer instance adı cafebot_XXX formatındaysa, tenant kimliğini al ve ata
+            if (!string.IsNullOrEmpty(instanceFromPayload) && instanceFromPayload.StartsWith("cafebot_"))
+            {
+                var tenantId = instanceFromPayload.Substring("cafebot_".Length);
+                currentUserService.SetCurrentUserId(tenantId);
+            }
+
             await LogStep("WebhookReceived", "WebhookController.ProcessSingleMessageAsync",
                 $"{{\"event\":\"{eventType}\",\"instance\":\"{instanceFromPayload}\"}}",
                 null, "OK", null, (int)stepSw.ElapsedMilliseconds);
@@ -178,7 +233,7 @@ public class WebhookController : ControllerBase
             
             await LogStep("ConfigLoaded", "ConfigService.GetConfigAsync",
                 null,
-                $"{{\"SystemStatus\":\"{config.SystemStatus}\",\"ConnectionStatus\":\"{config.ConnectionStatus}\",\"TargetGroupId\":\"{config.TargetGroupId}\",\"SessionId\":\"{config.SessionId}\",\"PriorityList\":[{string.Join(",", config.PriorityList)}]}}",
+                $"{{\"SystemStatus\":\"{config.SystemStatus}\",\"ConnectionStatus\":\"{config.ConnectionStatus}\",\"TargetGroupIds\":[{string.Join(",", config.TargetGroupIds.Select(id => $"\"{id}\""))}],\"SessionId\":\"{config.SessionId}\",\"PriorityList\":[{string.Join(",", config.PriorityList)}]}}",
                 "OK", null, (int)stepSw.ElapsedMilliseconds);
 
             // Sistem çalışmıyor mu?
@@ -191,8 +246,8 @@ public class WebhookController : ControllerBase
             }
 
             // Hedef grup seçilmemiş mi?
-            var targetGroupId = config.TargetGroupId;
-            if (string.IsNullOrEmpty(targetGroupId))
+            var targetGroupIds = config.TargetGroupIds;
+            if (targetGroupIds == null || targetGroupIds.Count == 0)
             {
                 await LogStep("GroupCheck", "WebhookController",
                     null, null, "Skip", "Hedef grup seçilmemiş");
@@ -230,11 +285,11 @@ public class WebhookController : ControllerBase
             traceId = messageId ?? $"no-id-{DateTime.UtcNow.Ticks}";
 
             // RemoteJid kontrol
-            if (string.IsNullOrEmpty(remoteJid) || remoteJid != targetGroupId)
+            if (string.IsNullOrEmpty(remoteJid) || !targetGroupIds.Contains(remoteJid))
             {
                 await LogStep("MessageValidated", "WebhookController",
-                    $"{{\"remoteJid\":\"{remoteJid}\",\"targetGroupId\":\"{targetGroupId}\",\"fromMe\":{fromMe.ToString().ToLower()},\"messageId\":\"{messageId}\"}}",
-                    null, "Skip", $"RemoteJid uyuşmuyor. Gelen: {remoteJid}, Hedef: {targetGroupId}",
+                    $"{{\"remoteJid\":\"{remoteJid}\",\"targetGroupIds\":[{string.Join(",", targetGroupIds.Select(id => $"\"{id}\""))}],\"fromMe\":{fromMe.ToString().ToLower()},\"messageId\":\"{messageId}\"}}",
+                    null, "Skip", $"RemoteJid uyuşmuyor. Gelen: {remoteJid}",
                     (int)stepSw.ElapsedMilliseconds);
                 return;
             }
@@ -260,17 +315,28 @@ public class WebhookController : ControllerBase
                 $"{{\"remoteJid\":\"{remoteJid}\",\"fromMe\":{fromMe.ToString().ToLower()},\"messageId\":\"{messageId}\"}}",
                 $"{{\"valid\":true}}", "OK", null, (int)stepSw.ElapsedMilliseconds);
 
+            // ── STEP 3.5: Deduplication Check ──
+            stepSw.Restart();
+            var isProcessed = await schedulerService.IsMessageProcessedAsync(messageId);
+            if (isProcessed)
+            {
+                await LogStep("DeduplicationCheck", "SchedulerService.IsMessageProcessedAsync",
+                    $"{{\"messageId\":\"{messageId}\"}}",
+                    $"{{\"isProcessed\":true}}", "Skip", "Mesaj daha önce işlenmiş (Çift Yanıt Koruması)", 
+                    (int)stepSw.ElapsedMilliseconds);
+                
+                _logger.LogInformation("Mesaj {MessageId} daha önce işlendiği için atlanıyor (Deduplication).", messageId);
+                return;
+            }
+            
+            await LogStep("DeduplicationCheck", "SchedulerService.IsMessageProcessedAsync",
+                    $"{{\"messageId\":\"{messageId}\"}}",
+                    $"{{\"isProcessed\":false}}", "OK", "Mesaj yeni", 
+                    (int)stepSw.ElapsedMilliseconds);
+
             // ── STEP 4: Instance Resolved ──
             stepSw.Restart();
-            string? webhookInstanceName = null;
-            
-            if (payload.TryGetProperty("instance", out var instanceEl))
-                webhookInstanceName = instanceEl.GetString();
-            else if (payload.TryGetProperty("instanceName", out var instanceNameEl))
-                webhookInstanceName = instanceNameEl.GetString();
-            else if (payload.TryGetProperty("data", out var dataEl2) && 
-                     dataEl2.TryGetProperty("instance", out var dataInstanceEl))
-                webhookInstanceName = dataInstanceEl.GetString();
+            string? webhookInstanceName = instanceFromPayload;
 
             if (string.IsNullOrEmpty(webhookInstanceName))
             {
@@ -426,7 +492,7 @@ public class WebhookController : ControllerBase
 
             // ── STEP 7: Slots Parsed ──
             stepSw.Restart();
-            var slots = await parserService.ParseShiftMessageAsync(text);
+            var slots = await parserService.ParseShiftMessageAsync(text, remoteJid);
             
             if (slots == null || slots.Count == 0)
             {
@@ -446,32 +512,42 @@ public class WebhookController : ControllerBase
 
             // ── STEP 8: Hour Selected ──
             stepSw.Restart();
-            var selectedHour = await schedulerService.SelectBestHourAsync(slots, config.PriorityList);
+            var groupPriorityList = config.PriorityList;
+            if (!string.IsNullOrEmpty(remoteJid))
+            {
+                var groupSettings = await configService.GetGroupSettingsAsync(remoteJid);
+                if (groupSettings != null && groupSettings.PriorityList != null && groupSettings.PriorityList.Count > 0)
+                {
+                    groupPriorityList = groupSettings.PriorityList;
+                }
+            }
+
+            var selectedHour = await schedulerService.SelectBestHourAsync(slots, groupPriorityList);
             
             if (selectedHour == null)
             {
                 await LogStep("HourSelected", "SchedulerService.SelectBestHourAsync",
-                    $"{{\"slots\":{slotsJson},\"priorityList\":[{string.Join(",", config.PriorityList)}]}}",
+                    $"{{\"slots\":{slotsJson},\"priorityList\":[{string.Join(",", groupPriorityList)}]}}",
                     null, "Error", "Uygun saat bulunamadı",
                     (int)stepSw.ElapsedMilliseconds);
                 await LogActivity(activityRepo, ActivityType.Warning,
                     "Uygun saat bulunamadı",
-                    $"Slots: {string.Join(", ", slots.Select(s => $"{s.Hour}:00"))}, Priority: [{string.Join(",", config.PriorityList)}]");
+                    $"Slots: {string.Join(", ", slots.Select(s => $"{s.Hour}:00"))}, Priority: [{string.Join(",", groupPriorityList)}]");
                 return;
             }
 
             await LogStep("HourSelected", "SchedulerService.SelectBestHourAsync",
-                $"{{\"slots\":{slotsJson},\"priorityList\":[{string.Join(",", config.PriorityList)}]}}",
+                $"{{\"slots\":{slotsJson},\"priorityList\":[{string.Join(",", groupPriorityList)}]}}",
                 $"{{\"selectedHour\":{selectedHour}}}",
                 "OK", null, (int)stepSw.ElapsedMilliseconds);
 
             // ── STEP 9: Send Attempt ──
             stepSw.Restart();
             await LogStep("SendAttempt", "WhatsAppService.SendMessageAsync",
-                $"{{\"instanceName\":\"{webhookInstanceName}\",\"targetGroupId\":\"{targetGroupId}\",\"message\":\"{selectedHour}\",\"dbSessionId\":\"{config.SessionId}\"}}",
+                $"{{\"instanceName\":\"{webhookInstanceName}\",\"targetGroupId\":\"{remoteJid}\",\"message\":\"{selectedHour}\",\"dbSessionId\":\"{config.SessionId}\"}}",
                 null, "OK", null, 0);
 
-            var sendSuccess = await whatsAppService.SendMessageAsync(webhookInstanceName, targetGroupId, selectedHour.ToString()!, traceId);
+            var sendSuccess = await whatsAppService.SendMessageAsync(webhookInstanceName, remoteJid, selectedHour.ToString()!, traceId);
 
             // ── STEP 11: Process Completed ──
             if (sendSuccess)
@@ -487,7 +563,7 @@ public class WebhookController : ControllerBase
                 _logger.LogInformation("✅ Saat {Hour} seçildi ve gönderildi! MessageId: {Id}", selectedHour, messageId);
                 await LogActivity(activityRepo, ActivityType.Success,
                     $"Saat {selectedHour} seçildi ve gönderildi ✅",
-                    $"MessageId: {messageId}, GroupId: {targetGroupId}");
+                    $"MessageId: {messageId}, GroupId: {remoteJid}");
             }
             else
             {

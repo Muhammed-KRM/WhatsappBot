@@ -1,0 +1,227 @@
+@page "/ai-settings"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CafeBot.Web.Services
+@inject ApiService ApiService
+
+<PageTitle>Yapay Zeka Ayarlari</PageTitle>
+
+<div class="container" style="max-width: 800px;">
+    <h2 class="mb-4">🤖 Grup Bazli Yapay Zeka (AI) Ayarlari</h2>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(successMessage))
+    {
+        <div class="alert alert-success alert-dismissible">
+            @successMessage
+            <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
+        </div>
+    }
+
+    <div class="card mb-4 shadow-sm">
+        <div class="card-body">
+            <h5 class="card-title">Grup Secimi</h5>
+            <p class="text-muted small">AI komutunu degistirmek istediginiz grubu secin.</p>
+            
+            <select class="form-select" @onchange="OnGroupSelected">
+                <option value="" selected="@string.IsNullOrEmpty(selectedGroupId)">-- Seciniz --</option>
+                @for(int i=0; i<targetGroupIds.Count; i++)
+                {
+                    var id = targetGroupIds[i];
+                    var name = targetGroupNames.Count > i ? targetGroupNames[i] : id;
+                    <option value="@id" selected="@(selectedGroupId == id)">@name</option>
+                }
+            </select>
+            
+            @if (targetGroupIds.Count == 0)
+            {
+                <div class="alert alert-info mt-2 mb-0 small">
+                    <i class="bi bi-info-circle"></i> Oncelikle "Grup Secimi" sayfasindan botun islem yapacagi gruplari secmelisiniz.
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(selectedGroupId))
+    {
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Ozel Sistem Komutu (Prompt) - @selectedGroupName</h5>
+                <p class="text-muted small">
+                    Bu gruba ozel olarak botun mesajlari nasil anlayacagini belirleyebilirsiniz.
+                </p>
+
+                @if (isLoading)
+                {
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary"></div>
+                        <p class="mt-2 text-muted">Ayarlar yukleniyor...</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Prompt (Yapay Zeka Komutu)</label>
+                        <textarea class="form-control font-monospace" rows="14" @bind="promptValue" style="font-size: 0.9rem;"></textarea>
+                    </div>
+
+                    <div class="alert alert-warning" style="font-size: 0.85rem;">
+                        <strong>⚠️ Dikkat:</strong> Prompt metnini degistirirken su kisimlari bozmamaya ozen gosterin:
+                        <ul class="mb-0 mt-1">
+                            <li><code>{{0}}</code> - Bu kisim, bot calisirken gelen WhatsApp mesajiyla degistirilecektir.</li>
+                            <li><strong>JSON Formati</strong> - Yapay zekanin sadece istenen JSON formatinda yanit vermesini saglamalisiniz. Aksi halde sistem mesajlari anlayamaz.</li>
+                        </ul>
+                    </div>
+
+                    <div class="d-flex justify-content-between">
+                        <button class="btn btn-outline-danger" @onclick="ResetToDefault">
+                            <i class="bi bi-arrow-counterclockwise"></i> Varsayilana Don
+                        </button>
+                        <button class="btn btn-primary" @onclick="SavePrompt" disabled="@isSaving">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            <i class="bi bi-save"></i> Kaydet
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<string> targetGroupIds = new();
+    private List<string> targetGroupNames = new();
+    
+    private string? selectedGroupId;
+    private string selectedGroupName = "";
+
+    private string? promptValue;
+    private string? errorMessage;
+    private string? successMessage;
+    private bool isLoading;
+    private bool isSaving;
+
+    private const string DefaultPrompt = @"Bu WhatsApp mesajindan vardiya saatlerini ve kisi sayilarini cikar.
+Mesaj: '{0}'
+
+Yaniti sadece JSON formatinda ver, baska aciklama ekleme:
+{
+  ""isShiftMessage"": true/false,
+  ""slots"": [
+    { ""hour"": 18, ""personCount"": 3 },
+    { ""hour"": 19, ""personCount"": 5 }
+  ]
+}
+
+Kurallar:
+- Eger mesaj vardiya/saat bilgisi icermiyorsa isShiftMessage: false don
+- Saat degerleri 0-23 arasi tam sayi olmali
+- Kisi sayisi pozitif tam sayi olmali
+- Sadece gecerli JSON don, baska metin ekleme";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadInitialData();
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadInitialData()
+    {
+        isLoading = true;
+        var (config, error) = await ApiService.GetConfig();
+        isLoading = false;
+
+        if (error != null)
+        {
+            errorMessage = error;
+        }
+        else if (config != null)
+        {
+            targetGroupIds = config.TargetGroupIds ?? new();
+            targetGroupNames = config.TargetGroupNames ?? new();
+            
+            // Eger sadece 1 grup varsa otomatik sec
+            if (targetGroupIds.Count == 1)
+            {
+                await SelectGroup(targetGroupIds[0]);
+            }
+        }
+    }
+
+    private async Task OnGroupSelected(ChangeEventArgs e)
+    {
+        var groupId = e.Value?.ToString();
+        await SelectGroup(groupId);
+    }
+    
+    private async Task SelectGroup(string? groupId)
+    {
+        selectedGroupId = groupId;
+        errorMessage = null;
+        successMessage = null;
+        
+        if (string.IsNullOrEmpty(groupId))
+        {
+            promptValue = null;
+            return;
+        }
+        
+        var index = targetGroupIds.IndexOf(groupId);
+        selectedGroupName = index >= 0 && index < targetGroupNames.Count ? targetGroupNames[index] : groupId;
+
+        isLoading = true;
+        var (groupSettings, error) = await ApiService.GetGroupSettings(groupId);
+        isLoading = false;
+        
+        if (error != null)
+        {
+            errorMessage = error;
+            promptValue = DefaultPrompt;
+        }
+        else if (groupSettings != null)
+        {
+            promptValue = string.IsNullOrWhiteSpace(groupSettings.AiSystemPrompt) ? DefaultPrompt : groupSettings.AiSystemPrompt;
+        }
+    }
+
+    private void ResetToDefault()
+    {
+        promptValue = DefaultPrompt;
+        StateHasChanged();
+    }
+
+    private async Task SavePrompt()
+    {
+        if (string.IsNullOrEmpty(selectedGroupId)) return;
+
+        isSaving = true;
+        errorMessage = null;
+        successMessage = null;
+
+        var promptToSave = promptValue == DefaultPrompt ? null : promptValue;
+
+        var error = await ApiService.UpdateGroupAiPrompt(selectedGroupId, promptToSave);
+        isSaving = false;
+
+        if (error != null)
+        {
+            errorMessage = error;
+        }
+        else
+        {
+            successMessage = $"{selectedGroupName} icin yapay zeka ayarlari basariyla kaydedildi.";
+        }
+    }
+}

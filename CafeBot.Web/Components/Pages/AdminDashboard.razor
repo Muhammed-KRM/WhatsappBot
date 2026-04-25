@@ -1,0 +1,133 @@
+@page "/admin-dashboard"
+@using CafeBot.Business.DTOs
+@using CafeBot.Web.Services
+@inject ApiService ApiService
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize(Roles = "Admin")]
+
+<PageTitle>Yönetim Paneli - CafeBot</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3 mb-0 text-gray-800">Süper Admin Paneli</h1>
+    <span class="badge bg-danger">Yetkili Eriþim</span>
+</div>
+
+@if (isLoading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="mt-2 text-muted">Kullanýcýlar yükleniyor...</p>
+    </div>
+}
+else if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger">@errorMessage</div>
+}
+else if (users != null && users.Any())
+{
+    <div class="card shadow mb-4">
+        <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
+            <h6 class="m-0 font-weight-bold text-primary">Sistemdeki Tüm Kullanýcýlar</h6>
+            <span class="badge bg-secondary">Toplam: @users.Count</span>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>E-Posta</th>
+                            <th>Firma Adý</th>
+                            <th>Kayýt Tarihi</th>
+                            <th>Baðlantý</th>
+                            <th>Sistem</th>
+                            <th>Grup Sayýsý</th>
+                            <th>Ýþlemler</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var user in users)
+                        {
+                            <tr>
+                                <td class="fw-bold">@user.Email</td>
+                                <td>@(string.IsNullOrEmpty(user.CompanyName) ? "-" : user.CompanyName)</td>
+                                <td>@user.CreatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</td>
+                                <td>
+                                    @if (user.ConnectionStatus == "Connected")
+                                    {
+                                        <span class="badge bg-success">Baðlý</span>
+                                    }
+                                    else if (user.ConnectionStatus == "Disconnected")
+                                    {
+                                        <span class="badge bg-danger">Koptu</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-warning text-dark">@user.ConnectionStatus</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.SystemStatus == "Running")
+                                    {
+                                        <span class="badge bg-success">Çalýþýyor</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Durdu</span>
+                                    }
+                                </td>
+                                <td class="text-center">
+                                    <span class="badge rounded-pill bg-info text-dark">@user.SelectedGroupCount</span>
+                                </td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-danger" title="Kullanýcýyý Yasakla (Ban)">
+                                        <i class="bi bi-slash-circle"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-info">Sistemde henüz kayýtlý bir kullanýcý bulunmuyor.</div>
+}
+
+@code {
+    private bool isLoading = true;
+    private string? errorMessage;
+    private List<UserAdminDto>? users;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUsers();
+    }
+
+    private async Task LoadUsers()
+    {
+        isLoading = true;
+        errorMessage = null;
+
+        try
+        {
+            var result = await ApiService.GetAdminUsersAsync();
+            if (result.Success)
+            {
+                users = result.Data;
+            }
+            else
+            {
+                errorMessage = result.Error ?? "Kullanýcýlar yüklenirken bir hata oluþtu.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Beklenmeyen bir hata oluþtu: {ex.Message}";
+        }
+
+        isLoading = false;
+    }
+}

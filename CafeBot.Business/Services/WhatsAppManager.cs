@@ -2,7 +2,9 @@ using CafeBot.Business.DTOs;
 using CafeBot.Business.Infrastructure.WhatsApp;
 using CafeBot.Business.Interfaces;
 using CafeBot.Data.Enums;
+using CafeBot.Data.Interfaces;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace CafeBot.Business.Services;
 
@@ -12,18 +14,29 @@ public class WhatsAppManager : IWhatsAppService
     private readonly IConfigService _configService;
     private readonly ILogService _logService;
     private readonly ILogger<WhatsAppManager> _logger;
-    private const string SessionName = "cafebot";
+    private readonly Microsoft.Extensions.Configuration.IConfiguration _configuration;
+    private readonly Microsoft.Extensions.Caching.Memory.IMemoryCache _cache;
+    private readonly ICurrentUserService _currentUserService;
+
+    private string SessionName => $"cafebot_{_currentUserService.UserId}";
+    private string GroupsCacheKey => $"cafebot:groups:{_currentUserService.UserId}";
 
     public WhatsAppManager(
         EvolutionApiClient evolutionApiClient,
         IConfigService configService,
         ILogService logService,
-        ILogger<WhatsAppManager> logger)
+        ILogger<WhatsAppManager> logger,
+        Microsoft.Extensions.Configuration.IConfiguration configuration,
+        Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
+        ICurrentUserService currentUserService)
     {
         _evolutionApiClient = evolutionApiClient ?? throw new ArgumentNullException(nameof(evolutionApiClient));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _currentUserService = currentUserService ?? throw new ArgumentNullException(nameof(currentUserService));
     }
 
     public async Task<QRCodeDto> InitializeSessionAsync()
@@ -136,6 +149,12 @@ public class WhatsAppManager : IWhatsAppService
                 {
                     // Docker internal network'te API'nin adresi
                     var webhookUrl = "http://cafebot-api:8080/api/webhook/whatsapp";
+                    var securityToken = _configuration["Webhook:SecurityToken"];
+                    if (!string.IsNullOrEmpty(securityToken))
+                    {
+                        webhookUrl += $"?token={securityToken}";
+                    }
+
                     await _evolutionApiClient.SetWebhookAsync(activeSessionName, webhookUrl);
                     _logger.LogInformation("Webhook kaydedildi: {Url} (Session: {SessionName})", webhookUrl, activeSessionName);
                 }
@@ -161,10 +180,16 @@ public class WhatsAppManager : IWhatsAppService
         }
     }
 
-    public async Task<List<GroupDto>> GetGroupsAsync()
+    public async Task<List<GroupDto>> GetGroupsAsync(bool forceRefresh = false)
     {
         try
         {
+            if (!forceRefresh && _cache.TryGetValue(GroupsCacheKey, out List<GroupDto>? cachedGroups) && cachedGroups != null)
+            {
+                _logger.LogInformation("Gruplar önbellekten (cache) getirildi.");
+                return cachedGroups;
+            }
+
             // Önce mevcut session'ları listele
             var instances = await _evolutionApiClient.GetAllInstancesAsync();
             
@@ -206,6 +231,15 @@ public class WhatsAppManager : IWhatsAppService
                         Name: CleanGroupName(g.Subject!), // Emoji ve özel karakterleri temizle
                         ParticipantCount: g.Participants?.Count ?? 0))
                     .ToList();
+            }
+
+            if (groups.Count > 0)
+            {
+                var cacheOptions = new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
+                };
+                _cache.Set(GroupsCacheKey, groups, cacheOptions);
             }
 
             _logger.LogDebug("{Count} grup alındı. Session: {SessionName}", groups.Count, activeSessionName);

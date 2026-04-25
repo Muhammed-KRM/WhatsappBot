@@ -3,9 +3,10 @@ namespace CafeBot.Data.Entities;
 /// <summary>
 /// Fonksiyon hatalarını kaydeden log entity'si (OZELDERS pattern)
 /// </summary>
-public class FunctionLog
+public class FunctionLog : ITenantEntity
 {
     public int Id { get; set; }
+    public string UserId { get; set; } = string.Empty;
     public string ErrorCode { get; set; } = string.Empty;
     public string? ClassName { get; set; }
     public string? MethodName { get; set; }

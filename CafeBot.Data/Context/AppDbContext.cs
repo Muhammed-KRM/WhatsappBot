@@ -1,13 +1,20 @@
 using CafeBot.Data.Entities;
 using CafeBot.Data.Enums;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using CafeBot.Data.Interfaces;
 
 namespace CafeBot.Data.Context;
 
-public class AppDbContext : DbContext
+public class AppDbContext : IdentityDbContext<AppUser>
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
+    private readonly ICurrentUserService _currentUserService;
+
+    public AppDbContext(
+        DbContextOptions<AppDbContext> options,
+        ICurrentUserService currentUserService) : base(options)
     {
+        _currentUserService = currentUserService;
     }
 
     public DbSet<Configuration> Configurations { get; set; }
@@ -16,24 +23,17 @@ public class AppDbContext : DbContext
     public DbSet<EndpointLog> EndpointLogs { get; set; }
     public DbSet<FunctionLog> FunctionLogs { get; set; }
     public DbSet<ProcessLog> ProcessLogs { get; set; }
+    public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
+    public DbSet<GroupSettings> GroupSettings { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
-        // Configuration - tek kayıt olacak, seed data ile başlatılır
+        // Configuration
         modelBuilder.Entity<Configuration>(entity =>
         {
             entity.HasKey(e => e.Id);
-
-            entity.HasData(new Configuration
-            {
-                Id = 1,
-                ConnectionStatus = ConnectionStatus.Disconnected,
-                SystemStatus = SystemStatus.Stopped,
-                PriorityListJson = "[]",
-                LastUpdated = DateTime.UtcNow
-            });
         });
 
         // ActivityLog - Timestamp üzerinde index
@@ -82,5 +82,61 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.CreatedAt)
                 .HasDatabaseName("IX_ProcessLog_CreatedAt");
         });
+
+        // Global Query Filter for Multi-Tenant Isolation
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            if (typeof(ITenantEntity).IsAssignableFrom(entityType.ClrType))
+            {
+                modelBuilder.Entity(entityType.ClrType).HasQueryFilter(
+                    ConvertFilterExpression(entityType.ClrType));
+            }
+        }
+    }
+
+    private System.Linq.Expressions.LambdaExpression ConvertFilterExpression(Type entityType)
+    {
+        var newParam = System.Linq.Expressions.Expression.Parameter(entityType, "e");
+        var property = System.Linq.Expressions.Expression.Property(newParam, nameof(ITenantEntity.UserId));
+        
+        var serviceInstance = System.Linq.Expressions.Expression.Constant(this);
+        var serviceField = System.Linq.Expressions.Expression.Field(serviceInstance, "_currentUserService");
+        var userIdProperty = System.Linq.Expressions.Expression.Property(serviceField, nameof(ICurrentUserService.UserId));
+
+        var condition = System.Linq.Expressions.Expression.Equal(property, userIdProperty);
+        return System.Linq.Expressions.Expression.Lambda(condition, newParam);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        var userId = _currentUserService.UserId;
+
+        foreach (var entry in ChangeTracker.Entries<ITenantEntity>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                if (string.IsNullOrEmpty(entry.Entity.UserId))
+                {
+                    if (string.IsNullOrEmpty(userId))
+                    {
+                        // Log entity'leri için anonim girişe izin ver (çökmemesi için)
+                        if (entry.Entity is EndpointLog or FunctionLog or ProcessLog)
+                        {
+                            entry.Entity.UserId = "ANONYMOUS";
+                        }
+                        else
+                        {
+                            throw new InvalidOperationException($"Tenant UserId is required for {entry.Entity.GetType().Name} but no user is currently authenticated or provided.");
+                        }
+                    }
+                    else
+                    {
+                        entry.Entity.UserId = userId;
+                    }
+                }
+            }
+        }
+
+        return base.SaveChangesAsync(cancellationToken);
     }
 }

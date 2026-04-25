@@ -1,21 +1,26 @@
 using CafeBot.Data.Context;
 using CafeBot.Data.Entities;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authorization;
 
 namespace CafeBot.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize(Roles = "Admin")]
 public class LogController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly ILogger<LogController> _logger;
+    private readonly UserManager<AppUser> _userManager;
 
-    public LogController(AppDbContext db, ILogger<LogController> logger)
+    public LogController(AppDbContext db, ILogger<LogController> logger, UserManager<AppUser> userManager)
     {
         _db = db;
         _logger = logger;
+        _userManager = userManager;
     }
 
     /// <summary>
@@ -25,12 +30,17 @@ public class LogController : ControllerBase
     public async Task<ActionResult<EndpointLogsResponse>> GetEndpointLogs(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
-        [FromQuery] int? statusCode = null)
+        [FromQuery] int? statusCode = null,
+        [FromQuery] string? userId = null)
     {
-        var query = _db.EndpointLogs.AsQueryable();
+        var query = _db.EndpointLogs.IgnoreQueryFilters().AsQueryable();
 
         if (statusCode.HasValue)
             query = query.Where(l => l.StatusCode == statusCode.Value);
+        if (!string.IsNullOrEmpty(userId))
+            query = query.Where(l => l.UserId == userId);
+
+        var users = await _userManager.Users.ToDictionaryAsync(u => u.Id, u => u.Email ?? "Bilinmiyor");
 
         var total = await query.CountAsync();
         var logs = await query
@@ -41,6 +51,7 @@ public class LogController : ControllerBase
             {
                 Id         = l.Id,
                 TraceId    = l.TraceId,
+                UserId     = l.UserId,
                 Method     = l.Method,
                 Path       = l.Path,
                 Query      = l.Query,
@@ -52,6 +63,9 @@ public class LogController : ControllerBase
                 CreatedAt  = l.CreatedAt
             })
             .ToListAsync();
+
+        foreach (var log in logs)
+            log.UserEmail = users.GetValueOrDefault(log.UserId, "Bilinmiyor");
 
         return Ok(new EndpointLogsResponse { Total = total, Page = page, PageSize = pageSize, Logs = logs });
     }
@@ -73,10 +87,15 @@ public class LogController : ControllerBase
     [HttpGet("functions")]
     public async Task<ActionResult<FunctionLogsResponse>> GetFunctionLogs(
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 50)
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? userId = null)
     {
-        var total = await _db.FunctionLogs.CountAsync();
-        var logs = await _db.FunctionLogs
+        var query = _db.FunctionLogs.IgnoreQueryFilters().AsQueryable();
+        if (!string.IsNullOrEmpty(userId))
+            query = query.Where(l => l.UserId == userId);
+
+        var total = await query.CountAsync();
+        var logs = await query
             .OrderByDescending(l => l.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -94,19 +113,32 @@ public class LogController : ControllerBase
         var now = DateTime.UtcNow;
         var last24h = now.AddHours(-24);
 
+        var endpointQuery = _db.EndpointLogs.IgnoreQueryFilters();
+        var functionQuery = _db.FunctionLogs.IgnoreQueryFilters();
+
         var stats = new LogStatsDto
         {
-            TotalEndpointLogs  = await _db.EndpointLogs.CountAsync(),
-            TotalFunctionErrors = await _db.FunctionLogs.CountAsync(),
-            Last24hRequests    = await _db.EndpointLogs.CountAsync(l => l.CreatedAt >= last24h),
-            Last24hErrors      = await _db.EndpointLogs.CountAsync(l => l.CreatedAt >= last24h && l.StatusCode >= 500),
-            Last24hFunctionErrors = await _db.FunctionLogs.CountAsync(l => l.CreatedAt >= last24h),
-            AvgDurationMs      = await _db.EndpointLogs.AnyAsync()
-                ? (int)await _db.EndpointLogs.AverageAsync(l => (double)l.DurationMs)
+            TotalEndpointLogs  = await endpointQuery.CountAsync(),
+            TotalFunctionErrors = await functionQuery.CountAsync(),
+            Last24hRequests    = await endpointQuery.CountAsync(l => l.CreatedAt >= last24h),
+            Last24hErrors      = await endpointQuery.CountAsync(l => l.CreatedAt >= last24h && l.StatusCode >= 500),
+            Last24hFunctionErrors = await functionQuery.CountAsync(l => l.CreatedAt >= last24h),
+            AvgDurationMs      = await endpointQuery.AnyAsync()
+                ? (int)await endpointQuery.AverageAsync(l => (double)l.DurationMs)
                 : 0
         };
 
         return Ok(stats);
+    }
+
+    /// <summary>
+    /// Admin için tüm kullanıcı listesi (log filtreleme dropdown'u için)
+    /// </summary>
+    [HttpGet("users")]
+    public async Task<ActionResult> GetLogUsers()
+    {
+        var users = await _userManager.Users.Select(u => new { u.Id, u.Email, u.CompanyName }).ToListAsync();
+        return Ok(users);
     }
 
     /// <summary>
@@ -116,10 +148,14 @@ public class LogController : ControllerBase
     [HttpGet("process")]
     public async Task<ActionResult<ProcessLogsResponse>> GetProcessLogs(
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 20)
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? userId = null)
     {
-        // Her trace'in özet bilgisini al (ilk ve son adım)
-        var traceIds = await _db.ProcessLogs
+        var query = _db.ProcessLogs.IgnoreQueryFilters().AsQueryable();
+        if (!string.IsNullOrEmpty(userId))
+            query = query.Where(p => p.UserId == userId);
+
+        var traceIds = await query
             .GroupBy(p => p.TraceId)
             .Select(g => new ProcessTraceSummaryDto
             {
@@ -180,6 +216,8 @@ public class EndpointLogDto
 {
     public int Id { get; set; }
     public string? TraceId { get; set; }
+    public string UserId { get; set; } = string.Empty;
+    public string? UserEmail { get; set; }
     public string Method { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public string? Query { get; set; }

@@ -18,6 +18,7 @@ public static class ServiceRegistration
         services.AddScoped<IConfigRepository, ConfigRepository>();
         services.AddScoped<IActivityLogRepository, ActivityLogRepository>();
         services.AddScoped<IProcessedMessageRepository, ProcessedMessageRepository>();
+        services.AddScoped<IGroupSettingsRepository, GroupSettingsRepository>();
 
         return services;
     }

@@ -1,12 +1,14 @@
 using CafeBot.Business.DTOs;
 using CafeBot.Data.Enums;
 using CafeBot.Data.Repositories;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CafeBot.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class ActivityController : ControllerBase
 {
     private readonly IActivityLogRepository _activityLogRepository;

@@ -1,11 +1,11 @@
 @page "/group-selection"
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @inject ApiService ApiService
 
-<PageTitle>Grup SeÃ§imi</PageTitle>
+<PageTitle>Grup Seçimi</PageTitle>
 
 <div class="container" style="max-width: 600px;">
-    <h2 class="mb-4">ðŸ‘¥ Grup SeÃ§imi</h2>
+    <h2 class="mb-4">?? Grup Seçimi</h2>
 
     @if (!string.IsNullOrEmpty(errorMessage))
     {
@@ -23,50 +23,72 @@
         </div>
     }
 
-    @if (!string.IsNullOrEmpty(currentGroupName))
+    @if (currentGroupNames != null && currentGroupNames.Count > 0)
     {
         <div class="alert alert-info">
-            <strong>Mevcut Grup:</strong> @currentGroupName
+            <strong>Mevcut Seçili Gruplar:</strong><br />
+            <ul class="mb-0 mt-2">
+                @foreach(var name in currentGroupNames)
+                {
+                    <li>@name</li>
+                }
+            </ul>
         </div>
     }
 
-    <div class="card">
+    <div class="card shadow-sm">
         <div class="card-body">
-            <h5 class="card-title">WhatsApp Grubu SeÃ§</h5>
-            <p class="text-muted small">Sistemin izleyeceÄŸi kafe WhatsApp grubunu seÃ§in.</p>
+            <h5 class="card-title">WhatsApp Gruplarýný Seç</h5>
+            <p class="text-muted small">Sistemin vardiya mesajlarýný izleyeceði kafe WhatsApp gruplarýný seçin. Birden fazla grup seçebilirsiniz.</p>
 
             @if (isLoading)
             {
-                <div class="text-center py-3">
+                <div class="text-center py-4">
                     <div class="spinner-border text-primary"></div>
-                    <p class="mt-2 text-muted">Gruplar yÃ¼kleniyor...</p>
+                    <p class="mt-2 text-muted">Gruplar yükleniyor...</p>
                 </div>
             }
             else if (groups != null)
             {
-                <div class="mb-3">
-                    <label class="form-label">Grup</label>
-                    <select class="form-select" @bind="selectedGroupId">
-                        <option value="">-- Grup seÃ§in --</option>
+                <div class="mb-4" style="max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; padding: 15px; background: #fafafa;">
+                    @if (groups.Count == 0)
+                    {
+                        <div class="text-muted text-center py-2">Hiç grup bulunamadý. Lütfen WhatsApp baðlý olduðundan emin olun.</div>
+                    }
+                    else
+                    {
                         @foreach (var group in groups)
                         {
-                            <option value="@group.Id">@group.Name (@group.ParticipantCount kiÅŸi)</option>
+                            <div class="form-check mb-2 custom-control custom-checkbox">
+                                <input class="form-check-input" type="checkbox" id="@group.Id" 
+                                       checked="@selectedGroupIds.Contains(group.Id)" 
+                                       @onchange="@(e => ToggleGroupSelection(group.Id, (bool)(e.Value ?? false)))">
+                                <label class="form-check-label" style="cursor:pointer;" for="@group.Id">
+                                    <span class="fw-medium">@group.Name</span> 
+                                    <span class="badge bg-secondary ms-1">@group.ParticipantCount kiþi</span>
+                                </label>
+                            </div>
                         }
-                    </select>
+                    }
                 </div>
 
                 <div class="d-flex gap-2">
-                    <button class="btn btn-primary"
-                            @onclick="SaveGroup"
-                            disabled="@(string.IsNullOrEmpty(selectedGroupId) || isSaving)">
+                    <button class="btn btn-primary px-4"
+                            @onclick="SaveGroups"
+                            disabled="@isSaving">
                         @if (isSaving)
                         {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <span class="spinner-border spinner-border-sm me-2"></span>
+                            <span>Kaydediliyor...</span>
                         }
-                        Kaydet
+                        else
+                        {
+                            <i class="bi bi-save me-1"></i>
+                            <span>Seçili Gruplarý Kaydet</span>
+                        }
                     </button>
-                    <button class="btn btn-outline-secondary" @onclick="LoadGroups" disabled="@isLoading">
-                        ðŸ”„ Yenile
+                    <button class="btn btn-outline-secondary" @onclick="() => LoadGroups(true)" disabled="@isLoading">
+                        <i class="bi bi-arrow-clockwise me-1"></i> Yenile
                     </button>
                 </div>
             }
@@ -76,8 +98,9 @@
 
 @code {
     private List<GroupDto>? groups;
-    private string selectedGroupId = string.Empty;
-    private string? currentGroupName;
+    private List<string> selectedGroupIds = new();
+    private List<string> currentGroupNames = new();
+    
     private string? errorMessage;
     private string? successMessage;
     private bool isLoading;
@@ -103,48 +126,63 @@
         var (config, _) = await ApiService.GetConfig();
         if (config != null)
         {
-            currentGroupName = config.TargetGroupName;
-            selectedGroupId = config.TargetGroupId ?? string.Empty;
+            currentGroupNames = config.TargetGroupNames ?? new();
+            selectedGroupIds = config.TargetGroupIds ?? new();
         }
     }
 
-    private async Task LoadGroups()
+    private async Task LoadGroups(bool forceRefresh = false)
     {
         isLoading = true;
         errorMessage = null;
         StateHasChanged();
 
-        var (data, error) = await ApiService.GetGroups();
+        var (data, error) = await ApiService.GetGroups(forceRefresh);
         isLoading = false;
 
         if (error != null)
             errorMessage = error;
         else
-            groups = data;
+            groups = data?.OrderByDescending(g => selectedGroupIds.Contains(g.Id)).ThenBy(g => g.Name).ToList();
             
         StateHasChanged();
     }
 
-    private async Task SaveGroup()
+    private void ToggleGroupSelection(string groupId, bool isSelected)
     {
-        if (string.IsNullOrEmpty(selectedGroupId)) return;
+        if (isSelected && !selectedGroupIds.Contains(groupId))
+        {
+            selectedGroupIds.Add(groupId);
+        }
+        else if (!isSelected && selectedGroupIds.Contains(groupId))
+        {
+            selectedGroupIds.Remove(groupId);
+        }
+    }
 
+    private async Task SaveGroups()
+    {
         isSaving = true;
         errorMessage = null;
         successMessage = null;
 
-        var selectedGroup = groups?.FirstOrDefault(g => g.Id == selectedGroupId);
-        var groupName = selectedGroup?.Name ?? selectedGroupId;
+        var selectedGroupNames = groups?
+            .Where(g => selectedGroupIds.Contains(g.Id))
+            .Select(g => g.Name ?? g.Id)
+            .ToList() ?? new List<string>();
 
-        var error = await ApiService.UpdateGroup(selectedGroupId, groupName);
+        var error = await ApiService.UpdateGroups(selectedGroupIds, selectedGroupNames);
         isSaving = false;
 
         if (error != null)
+        {
             errorMessage = error;
+        }
         else
         {
-            currentGroupName = groupName;
-            successMessage = $"Grup baÅŸarÄ±yla kaydedildi: {groupName}";
+            currentGroupNames = selectedGroupNames;
+            successMessage = $"Baðlantý baþarýyla güncellendi. Artýk {selectedGroupIds.Count} grup dinleniyor.";
         }
     }
 }
+

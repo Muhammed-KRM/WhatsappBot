@@ -1,6 +1,7 @@
 using CafeBot.Business.Infrastructure.AI;
 using CafeBot.Business.Infrastructure.WhatsApp;
 using CafeBot.Business.Interfaces;
+using CafeBot.Data.Interfaces;
 using CafeBot.Business.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,11 +14,19 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddBusinessServices(this IServiceCollection services, IConfiguration configuration)
     {
+        // Standart Memory Cache (Performans ve UI önbelleği için)
+        services.AddMemoryCache();
+
+        // Http Context & User Service (Multi-Tenant)
+        services.AddHttpContextAccessor();
+        services.AddScoped<ICurrentUserService, CurrentUserService>();
+
         // Business Services (Managers)
         services.AddScoped<IConfigService, ConfigManager>();
         services.AddScoped<IWhatsAppService, WhatsAppManager>();
         services.AddScoped<IMessageParserService, MessageParserManager>();
         services.AddScoped<ISchedulerService, SchedulerManager>();
+        services.AddScoped<INotificationService, NotificationService>();
 
         // Loglama servisi (OZELDERS pattern - veritabanına yazar)
         services.AddScoped<ILogService, LogManager>();

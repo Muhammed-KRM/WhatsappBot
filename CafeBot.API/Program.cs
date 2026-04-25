@@ -5,6 +5,11 @@ using CafeBot.Data;
 using CafeBot.Data.Context;
 using Microsoft.EntityFrameworkCore;
 
+using Microsoft.AspNetCore.Identity;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using CafeBot.Data.Entities;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // === 1. VERİTABANI (Data Layer) ===
@@ -12,6 +17,41 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
     ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection yapılandırması eksik.");
 
 builder.Services.AddDataLayer(connectionString);
+
+// === 1.1 IDENTITY & JWT (Authentication) ===
+builder.Services.AddIdentity<AppUser, IdentityRole>(options =>
+{
+    options.Password.RequireDigit = false;
+    options.Password.RequiredLength = 6;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase = false;
+    options.Password.RequireLowercase = false;
+})
+.AddEntityFrameworkStores<AppDbContext>()
+.AddDefaultTokenProviders();
+
+var jwtSecret = builder.Configuration["JwtSettings:Secret"] ?? "CafeBotSuperSecretKey_NeedsToBeLongEnoughForHS256!";
+var jwtIssuer = builder.Configuration["JwtSettings:Issuer"] ?? "CafeBotApi";
+var jwtAudience = builder.Configuration["JwtSettings:Audience"] ?? "CafeBotUsers";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtIssuer,
+        ValidAudience = jwtAudience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret))
+    };
+});
 
 // === 2. İŞ KATMANI (Business Layer) ===
 builder.Services.AddBusinessServices(builder.Configuration);
@@ -22,6 +62,29 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new() { Title = "CafeBot API", Version = "v1" });
+    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "JWT Authorization header using the Bearer scheme. Example: \"Bearer {token}\""
+    });
+    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
 });
 
 // === 4. SIGNALR ===
@@ -113,6 +176,46 @@ using (var scope = app.Services.CreateScope())
     {
         await context.Database.MigrateAsync();
         logger.LogInformation("Veritabanı migration başarılı.");
+
+        var roleManager = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.RoleManager<Microsoft.AspNetCore.Identity.IdentityRole>>();
+        if (!await roleManager.RoleExistsAsync("Admin"))
+        {
+            await roleManager.CreateAsync(new Microsoft.AspNetCore.Identity.IdentityRole("Admin"));
+            logger.LogInformation("Admin rolü oluşturuldu.");
+        }
+
+        // Sabit Admin hesabı oluşturma
+        var adminEmail = app.Configuration["AdminSettings:Email"];
+        var adminPassword = app.Configuration["AdminSettings:Password"];
+        if (!string.IsNullOrEmpty(adminEmail) && !string.IsNullOrEmpty(adminPassword))
+        {
+            var userManager = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<CafeBot.Data.Entities.AppUser>>();
+            var existingAdmin = await userManager.FindByEmailAsync(adminEmail);
+            if (existingAdmin == null)
+            {
+                var adminUser = new CafeBot.Data.Entities.AppUser
+                {
+                    UserName = adminEmail,
+                    Email = adminEmail,
+                    CompanyName = "CafeBot Admin"
+                };
+                var result = await userManager.CreateAsync(adminUser, adminPassword);
+                if (result.Succeeded)
+                {
+                    await userManager.AddToRoleAsync(adminUser, "Admin");
+                    logger.LogInformation("Sabit Admin hesabı oluşturuldu: {Email}", adminEmail);
+                }
+                else
+                {
+                    logger.LogWarning("Admin hesabı oluşturulamadı: {Errors}", string.Join(", ", result.Errors.Select(e => e.Description)));
+                }
+            }
+            else if (!await userManager.IsInRoleAsync(existingAdmin, "Admin"))
+            {
+                await userManager.AddToRoleAsync(existingAdmin, "Admin");
+                logger.LogInformation("Mevcut kullanıcıya Admin rolü verildi: {Email}", adminEmail);
+            }
+        }
     }
     catch (Exception ex)
     {

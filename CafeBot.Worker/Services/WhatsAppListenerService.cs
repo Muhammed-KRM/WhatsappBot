@@ -3,8 +3,11 @@ using CafeBot.Business.Interfaces;
 using CafeBot.Data.Enums;
 using CafeBot.Data.Repositories;
 using CafeBot.Data.Entities;
+using CafeBot.Data.Context;
+using CafeBot.Data.Interfaces;
 using CafeBot.Business.DTOs;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.EntityFrameworkCore;
 
 namespace CafeBot.Worker.Services;
 
@@ -37,31 +40,50 @@ public class WhatsAppListenerService : BackgroundService
     {
         _logger.LogInformation("WhatsAppListenerService başlatıldı. (Sadece durum izleme modu — mesaj işleme webhook tarafından yapılıyor)");
 
-        // NOT: Mesaj polling DEVRE DIŞI bırakıldı.
-        // Sebep: Worker'ın her 5 saniyede findMessages çağırması WhatsApp rate-overlimit hatasına neden oluyordu.
-        // Mesajlar artık sadece Evolution API webhook → WebhookController üzerinden işleniyor.
-        // Bu servis sadece periyodik bağlantı durumu izleme ve log tutma görevi yapar.
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
-                var configService = scope.ServiceProvider.GetRequiredService<IConfigService>();
+                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                
+                var users = await dbContext.Users.Select(u => new { u.Id, u.Email }).ToListAsync(stoppingToken);
 
-                var config = await configService.GetConfigAsync();
+                foreach (var user in users)
+                {
+                    try
+                    {
+                        var configService = scope.ServiceProvider.GetRequiredService<IConfigService>();
+                        var whatsAppService = scope.ServiceProvider.GetRequiredService<IWhatsAppService>();
+                        var notificationService = scope.ServiceProvider.GetRequiredService<INotificationService>();
+                        var currentUserService = scope.ServiceProvider.GetRequiredService<ICurrentUserService>();
+                        
+                        currentUserService.SetCurrentUserId(user.Id);
 
-                if (config.SystemStatus == SystemStatus.Running &&
-                    config.ConnectionStatus == ConnectionStatus.Connected)
-                {
-                    // Her 1 dakikada bir "dinliyorum" logu at (durum takibi için)
-                    await LogActivityAsync(ActivityType.Info, "WhatsApp dinleniyor...", $"Grup: {config.TargetGroupName} ({config.TargetGroupId})");
-                }
-                else
-                {
-                    _logger.LogDebug(
-                        "Sistem aktif değil veya bağlantı yok. SystemStatus: {SystemStatus}, ConnectionStatus: {ConnectionStatus}",
-                        config.SystemStatus, config.ConnectionStatus);
+                        var config = await configService.GetConfigAsync();
+                        
+                        if (config.SystemStatus != SystemStatus.Running) continue;
+
+                        var oldStatus = config.ConnectionStatus;
+                        var currentStatus = await whatsAppService.GetConnectionStatusAsync();
+
+                        if (oldStatus == ConnectionStatus.Connected && currentStatus == ConnectionStatus.Disconnected)
+                        {
+                            _logger.LogWarning("DİKKAT: Kullanıcı {Email} ({UserId}) için WhatsApp bağlantısı düştü! Bildirim tetikleniyor.", user.Email, user.Id);
+                            await notificationService.SendConnectionLostAlertAsync(config.SessionId ?? $"cafebot_{user.Id}", DateTime.UtcNow, user.Email!);
+                        }
+
+                        if (currentStatus == ConnectionStatus.Connected)
+                        {
+                            var groupNamesStr = config.TargetGroupNames != null && config.TargetGroupNames.Count > 0 ? string.Join(", ", config.TargetGroupNames) : "Grup Yok";
+                            var groupIdsStr = config.TargetGroupIds != null && config.TargetGroupIds.Count > 0 ? string.Join(", ", config.TargetGroupIds) : "Grup Yok";
+                            await LogActivityAsync(scope, ActivityType.Info, "WhatsApp bağlantısı aktif, webhook üzerinden dinleniyor...", $"Grup: {groupNamesStr} ({groupIdsStr})");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Kullanıcı {Email} ({UserId}) için durum kontrolü sırasında hata oluştu", user.Email, user.Id);
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -75,7 +97,6 @@ public class WhatsAppListenerService : BackgroundService
 
             try
             {
-                // 60 saniye aralıkla durum kontrolü (eskiden 5 sn'de bir polling yapılıyordu)
                 await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
             }
             catch (OperationCanceledException)
@@ -93,126 +114,14 @@ public class WhatsAppListenerService : BackgroundService
         IServiceProvider serviceProvider,
         CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(sessionId))
-        {
-            _logger.LogDebug("Session ID yapılandırılmamış, mesaj dinleme atlanıyor.");
-            return;
-        }
-
-        if (string.IsNullOrEmpty(targetGroupId))
-        {
-            _logger.LogDebug("Hedef grup ID'si yapılandırılmamış, mesaj dinleme atlanıyor.");
-            return;
-        }
-
-        try
-        {
-            var evolutionClient = serviceProvider.GetRequiredService<EvolutionApiClient>();
-            var rawMessages = await evolutionClient.GetMessagesAsync(sessionId, targetGroupId);
-
-            if (rawMessages == null || rawMessages.Count == 0)
-                return;
-
-            // EvolutionMessage → IncomingMessage dönüşümü ve filtreleme
-            var newMessages = new List<IncomingMessage>();
-            foreach (var msg in rawMessages)
-            {
-                // Sadece karşı taraftan gelen mesajlar (VEYA kendimizden gelenler, test için izin veriyoruz)
-                // Ancak botun kendi cevabına (örn: "19") tekrar cevap vermesini önlemek için IsShiftMessage kontrolüne güveniyoruz.
-                // if (msg.MessageKey?.FromMe == true)
-                //    continue;
-
-                var messageId = msg.MessageKey?.Id ?? msg.Id;
-                if (string.IsNullOrEmpty(messageId))
-                    continue;
-
-                // Timestamp dönüşümü (Unix epoch)
-                var receivedAt = msg.MessageTimestamp.HasValue
-                    ? DateTimeOffset.FromUnixTimeSeconds(msg.MessageTimestamp.Value).UtcDateTime
-                    : DateTime.UtcNow;
-
-                // Sadece son işlemeden sonraki mesajlar
-                if (receivedAt <= _lastProcessedAt)
-                    continue;
-
-                // Mesaj metnini al
-                var text = msg.Message?.Conversation
-                    ?? msg.Message?.ExtendedTextMessage?.Text
-                    ?? string.Empty;
-
-                if (string.IsNullOrWhiteSpace(text))
-                    continue;
-
-                newMessages.Add(new IncomingMessage
-                {
-                    MessageId = messageId,
-                    GroupId = msg.MessageKey?.RemoteJid ?? targetGroupId,
-                    Text = text,
-                    ReceivedAt = receivedAt
-                });
-            }
-
-            if (newMessages.Count == 0)
-                return;
-
-            _logger.LogDebug("{Count} yeni mesaj alındı.", newMessages.Count);
-
-            var processor = serviceProvider.GetRequiredService<MessageProcessorService>();
-
-            foreach (var msg in newMessages.OrderBy(m => m.ReceivedAt))
-            {
-                if (ct.IsCancellationRequested)
-                    break;
-
-                // In-memory duplicate guard
-                if (_seenMessageIds.Contains(msg.MessageId))
-                    continue;
-
-                _seenMessageIds.Add(msg.MessageId);
-
-                // Bellek sızıntısını önlemek için eski ID'leri temizle
-                if (_seenMessageIds.Count > 1000)
-                    _seenMessageIds.Clear();
-
-                try
-                {
-                    await processor.ProcessMessageAsync(msg);
-
-                    // Son işlenen zamanı güncelle
-                    if (msg.ReceivedAt > _lastProcessedAt)
-                        _lastProcessedAt = msg.ReceivedAt;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Mesaj işlenirken hata. MessageId: {MessageId}", msg.MessageId);
-                }
-            }
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(ex, "Evolution API'ye bağlanılamadı. Bağlantı durumu güncelleniyor.");
-
-            try
-            {
-                var configService = serviceProvider.GetRequiredService<IConfigService>();
-                await configService.UpdateConnectionStatusAsync(ConnectionStatus.Disconnected);
-            }
-            catch (Exception innerEx)
-            {
-                _logger.LogError(innerEx, "Bağlantı durumu güncellenirken hata oluştu");
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Mesaj dinleme sırasında beklenmeyen hata oluştu");
-        }
+        // ... (Bu method kullanılmıyor, webhook üzerinden işleniyor ancak geriye dönük uyumluluk için duruyor)
+        await Task.CompletedTask;
     }
 
-    private async Task LogActivityAsync(ActivityType type, string message, string? details = null)
+    private async Task LogActivityAsync(Microsoft.Extensions.DependencyInjection.AsyncServiceScope scope, ActivityType type, string message, string? details = null)
     {
         try
         {
-            await using var scope = _scopeFactory.CreateAsyncScope();
             var repo = scope.ServiceProvider.GetRequiredService<IActivityLogRepository>();
             var hub = scope.ServiceProvider.GetRequiredService<HubConnection>();
 
@@ -232,6 +141,9 @@ public class WhatsAppListenerService : BackgroundService
                 await hub.InvokeAsync("SendActivityUpdate", new ActivityLogDto(log.Id, log.Timestamp, log.Type, log.Message, log.Details));
             }
         }
-        catch { /* ignored */ }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Aktivite günlüğü yazılırken hata oluştu");
+        }
     }
 }

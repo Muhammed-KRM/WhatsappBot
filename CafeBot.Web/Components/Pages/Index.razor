@@ -1,33 +1,110 @@
 @page "/"
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CafeBot.Business.DTOs
+@using CafeBot.Data.Enums
 @inject ApiService ApiService
 
-<PageTitle>Dashboard - WhatsApp Kafe Otomasyon</PageTitle>
+<PageTitle>CafeBot Dashboard</PageTitle>
 
-<h2 class="mb-4">📊 Dashboard</h2>
+<div class="container">
+    <h2 class="mb-4">CafeBot Dashboard</h2>
 
-@if (!string.IsNullOrEmpty(errorMessage))
-{
-    <div class="alert alert-danger alert-dismissible">
-        @errorMessage
-        <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
-    </div>
-}
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            @errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
 
-@if (!string.IsNullOrEmpty(successMessage))
-{
-    <div class="alert alert-success alert-dismissible">
-        @successMessage
-        <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
-    </div>
-}
+    @if (!string.IsNullOrEmpty(successMessage))
+    {
+        <div class="alert alert-success alert-dismissible">
+            @successMessage
+            <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
+        </div>
+    }
+
+    @if (showApiKeyGuide)
+    {
+        <div class="card border-warning shadow mb-4">
+            <div class="card-header bg-warning text-dark fw-bold">
+                <i class="bi bi-key-fill me-2"></i> Gemini API Anahtari Gerekli
+            </div>
+            <div class="card-body">
+                <p class="text-danger fw-bold">Servisi baslatmadan once Gemini API anahtarinizi girmeniz gerekmektedir. Bu anahtar olmadan bot vardiya mesajlarini anlayamaz.</p>
+                
+                <div class="accordion" id="apiKeyGuide">
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#step1">
+                                Adim 1: Google AI Studio sayfasina gidin
+                            </button>
+                        </h2>
+                        <div id="step1" class="accordion-collapse collapse show" data-bs-parent="#apiKeyGuide">
+                            <div class="accordion-body">
+                                <p>Asagidaki linke tiklayarak Google AI Studio sayfasina gidin ve Google hesabinizla giris yapin.</p>
+                                <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn btn-outline-primary">
+                                    <i class="bi bi-box-arrow-up-right me-1"></i> Google AI Studio - API Key Sayfasi
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#step2">
+                                Adim 2: Yeni API Anahtari Olusturun
+                            </button>
+                        </h2>
+                        <div id="step2" class="accordion-collapse collapse" data-bs-parent="#apiKeyGuide">
+                            <div class="accordion-body">
+                                <p><strong>"Create API Key"</strong> (API Anahtari Olustur) butonuna basin. Bir proje secmeniz istenebilir; "Create API key in new project" secenegini secin.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#step3">
+                                Adim 3: Anahtari Kopyalayin
+                            </button>
+                        </h2>
+                        <div id="step3" class="accordion-collapse collapse" data-bs-parent="#apiKeyGuide">
+                            <div class="accordion-body">
+                                <p>Olusan <code>AIzaSy...</code> ile baslayan anahtari kopyalayin.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#step4">
+                                Adim 4: CafeBot Profilinize Yapi�tirin
+                            </button>
+                        </h2>
+                        <div id="step4" class="accordion-collapse collapse" data-bs-parent="#apiKeyGuide">
+                            <div class="accordion-body">
+                                <p>Kopyaladiginiz anahtari CafeBot <strong>Profil ve Ayarlar</strong> sayfasindaki "Ozel Gemini API Anahtari" alanina yapistirin ve kaydedin.</p>
+                                <a href="/profile" class="btn btn-primary">
+                                    <i class="bi bi-person-gear me-1"></i> Profil Sayfasina Git
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="alert alert-info mt-3 mb-0">
+                    <i class="bi bi-info-circle me-1"></i>
+                    <strong>Not:</strong> Bu islem tamamen <strong>ucretsizdir</strong>. Google Gemini ucretsiz katmaninda dakikada 15 istek hakki vardir ve vardiya botu icin fazlasiyla yeterlidir.
+                </div>
+            </div>
+        </div>
+    }
 
 <div class="row g-4">
-    <!-- Sistem Durumu Kartı -->
+    <!-- Sistem Durumu Karti -->
     <div class="col-md-6">
         <div class="card h-100">
             <div class="card-header">
-                <strong>🔧 Sistem Durumu</strong>
+                <strong>Sistem Durumu</strong>
             </div>
             <div class="card-body">
                 @if (isLoading)
@@ -41,7 +118,7 @@
                     <table class="table table-borderless mb-0">
                         <tbody>
                             <tr>
-                                <td class="text-muted">WhatsApp Bağlantısı</td>
+                                <td class="text-muted">WhatsApp Baglantisi</td>
                                 <td><StatusBadge ConnectionStatus="config.ConnectionStatus" /></td>
                             </tr>
                             <tr>
@@ -49,28 +126,33 @@
                                 <td><StatusBadge SystemStatus="config.SystemStatus" /></td>
                             </tr>
                             <tr>
-                                <td class="text-muted">Hedef Grup</td>
+                                <td class="text-muted">Hedef Gruplar</td>
                                 <td>
-                                    @if (!string.IsNullOrEmpty(config.TargetGroupName))
+                                    @if (config.TargetGroupNames != null && config.TargetGroupNames.Count > 0)
                                     {
-                                        <span class="badge bg-info text-dark">@config.TargetGroupName</span>
+                                        <div class="d-flex flex-wrap gap-1">
+                                            @foreach (var group in config.TargetGroupNames)
+                                            {
+                                                <span class="badge bg-info text-dark">@group</span>
+                                            }
+                                        </div>
                                     }
                                     else
                                     {
-                                        <span class="text-muted fst-italic">Seçilmedi</span>
+                                        <span class="text-muted fst-italic">Secilmedi</span>
                                     }
                                 </td>
                             </tr>
                             <tr>
-                                <td class="text-muted">Öncelik Listesi</td>
+                                <td class="text-muted">Oncelik Listesi</td>
                                 <td>
                                     @if (config.PriorityList.Count > 0)
                                     {
-                                        <span>@string.Join(" → ", config.PriorityList)</span>
+                                        <span>@string.Join(" > ", config.PriorityList)</span>
                                     }
                                     else
                                     {
-                                        <span class="text-muted fst-italic">Ayarlanmadı</span>
+                                        <span class="text-muted fst-italic">Ayarlanmadi</span>
                                     }
                                 </td>
                             </tr>
@@ -81,11 +163,11 @@
         </div>
     </div>
 
-    <!-- Kontrol Kartı -->
+    <!-- Kontrol Karti -->
     <div class="col-md-6">
         <div class="card h-100">
             <div class="card-header">
-                <strong>🎮 Kontrol</strong>
+                <strong>Kontrol</strong>
             </div>
             <div class="card-body d-flex flex-column justify-content-center align-items-center">
                 @if (config != null)
@@ -94,7 +176,7 @@
                     {
                         <div class="text-center">
                             <div class="mb-3">
-                                <span style="font-size: 3rem;">🟢</span>
+                                <span style="font-size: 3rem;">&#x2705;</span>
                             </div>
                             <p class="text-success fw-bold">Sistem Aktif</p>
                             <button class="btn btn-danger btn-lg"
@@ -104,7 +186,7 @@
                                 {
                                     <span class="spinner-border spinner-border-sm me-1"></span>
                                 }
-                                ⏹️ Durdur
+                                Durdur
                             </button>
                         </div>
                     }
@@ -112,7 +194,7 @@
                     {
                         <div class="text-center">
                             <div class="mb-3">
-                                <span style="font-size: 3rem;">🔴</span>
+                                <span style="font-size: 3rem;">&#x23F8;</span>
                             </div>
                             <p class="text-muted">Sistem Pasif</p>
                             <button class="btn btn-success btn-lg"
@@ -122,7 +204,7 @@
                                 {
                                     <span class="spinner-border spinner-border-sm me-1"></span>
                                 }
-                                ▶️ Başlat
+                                Baslat
                             </button>
                         </div>
                     }
@@ -135,14 +217,14 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <strong>📋 Son Aktiviteler</strong>
-                <a href="/activity" class="btn btn-sm btn-outline-secondary">Tümünü Gör</a>
+                <strong>Son Aktiviteler</strong>
+                <a href="/activity" class="btn btn-sm btn-outline-secondary">Tumunu Gor</a>
             </div>
             <div class="card-body p-0">
                 @if (recentLogs == null || recentLogs.Count == 0)
                 {
                     <div class="text-center py-3 text-muted">
-                        <p>Henüz aktivite kaydı yok.</p>
+                        <p>Henuz aktivite kaydi yok.</p>
                     </div>
                 }
                 else
@@ -158,6 +240,7 @@
         </div>
     </div>
 </div>
+</div>
 
 @code {
     private ConfigDto? config;
@@ -166,6 +249,7 @@
     private string? successMessage;
     private bool isLoading;
     private bool isActionLoading;
+    private bool showApiKeyGuide;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -204,6 +288,16 @@
         isActionLoading = true;
         errorMessage = null;
         successMessage = null;
+        showApiKeyGuide = false;
+
+        // Gemini API Key kontrolu
+        var (profile, _) = await ApiService.GetProfileAsync();
+        if (profile == null || string.IsNullOrEmpty(profile.PersonalGeminiApiKey))
+        {
+            showApiKeyGuide = true;
+            isActionLoading = false;
+            return;
+        }
 
         var error = await ApiService.UpdateSystemStatus(SystemStatus.Running);
         isActionLoading = false;
@@ -212,7 +306,7 @@
             errorMessage = error;
         else
         {
-            successMessage = "Sistem başlatıldı.";
+            successMessage = "Sistem baslatildi.";
             await LoadData();
         }
     }
@@ -235,3 +329,4 @@
         }
     }
 }
+

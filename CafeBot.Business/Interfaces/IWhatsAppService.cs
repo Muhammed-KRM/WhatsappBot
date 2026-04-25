@@ -7,7 +7,7 @@ public interface IWhatsAppService
 {
     Task<QRCodeDto> InitializeSessionAsync();
     Task<ConnectionStatus> GetConnectionStatusAsync();
-    Task<List<GroupDto>> GetGroupsAsync();
+    Task<List<GroupDto>> GetGroupsAsync(bool forceRefresh = false);
     Task<bool> SendMessageAsync(string groupId, string message);
     /// <summary>
     /// Belirli bir gruba mesaj gönderir.

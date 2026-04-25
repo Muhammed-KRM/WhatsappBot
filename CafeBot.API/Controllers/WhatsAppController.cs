@@ -1,12 +1,14 @@
 using CafeBot.Business.DTOs;
 using CafeBot.Business.Interfaces;
 using CafeBot.Data.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CafeBot.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class WhatsAppController : ControllerBase
 {
     private readonly IWhatsAppService _whatsAppService;
@@ -48,9 +50,9 @@ public class WhatsAppController : ControllerBase
     [HttpGet("groups")]
     [ProducesResponseType(typeof(List<GroupDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<List<GroupDto>>> GetGroups()
+    public async Task<ActionResult<List<GroupDto>>> GetGroups([FromQuery] bool forceRefresh = false)
     {
-        var groups = await _whatsAppService.GetGroupsAsync();
+        var groups = await _whatsAppService.GetGroupsAsync(forceRefresh);
         return Ok(groups);
     }
 

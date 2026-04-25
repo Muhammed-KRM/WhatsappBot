@@ -1,0 +1,95 @@
+@page "/login"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@using CafeBot.Business.DTOs
+@using CafeBot.Web.Auth
+@inject ApiService ApiService
+@inject TokenAuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavigationManager
+
+<PageTitle>Giriş Yap</PageTitle>
+
+<div class="d-flex justify-content-center align-items-center" style="min-height: 80vh;">
+    <div class="card shadow-sm" style="width: 100%; max-width: 400px; border-radius: 12px; overflow: hidden;">
+        <div class="card-header bg-primary text-white text-center py-4 border-0">
+            <h3 class="mb-0 fw-bold">☕ CafeBot</h3>
+            <p class="mb-0 text-white-50 small mt-1">Yönetim Paneline Giriş Yap</p>
+        </div>
+        <div class="card-body p-4">
+            @if (showRegisteredMessage)
+            {
+                <div class="alert alert-success p-2 mb-3 small">✅ Hesabınız başarıyla oluşturuldu! Lütfen giriş yapın.</div>
+            }
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <div class="alert alert-danger p-2 mb-3 small">@errorMessage</div>
+            }
+
+            <EditForm Model="@loginModel" OnValidSubmit="HandleLogin">
+                <DataAnnotationsValidator />
+                
+                <div class="mb-3">
+                    <label class="form-label text-muted small fw-bold">E-Posta Adresi</label>
+                    <InputText @bind-Value="loginModel.Email" type="email" class="form-control bg-light" placeholder="ornek@cafe.com" required />
+                </div>
+                
+                <div class="mb-4">
+                    <label class="form-label text-muted small fw-bold">Şifre</label>
+                    <InputText @bind-Value="loginModel.Password" type="password" class="form-control bg-light" placeholder="••••••••" required />
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100 py-2 fw-bold" disabled="@isLoading">
+                    @if (isLoading)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                    }
+                    Giriş Yap
+                </button>
+            </EditForm>
+        </div>
+        <div class="card-footer bg-transparent text-center border-0 pb-4 pt-0">
+            <p class="text-muted small mb-0">Hesabınız yok mu? <a href="/register" class="text-decoration-none fw-bold">Kayıt Olun</a></p>
+        </div>
+    </div>
+</div>
+
+@code {
+    private LoginRequestDto loginModel = new LoginRequestDto { Email = "", Password = "" };
+    private bool isLoading;
+    private string? errorMessage;
+    private bool showRegisteredMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated == true)
+        {
+            NavigationManager.NavigateTo("/");
+            return;
+        }
+
+        // Kayıt sonrası yönlendirme kontrolü
+        var uri = new Uri(NavigationManager.Uri);
+        showRegisteredMessage = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query).ContainsKey("registered");
+    }
+
+    private async Task HandleLogin()
+    {
+        isLoading = true;
+        errorMessage = null;
+
+        var (response, error) = await ApiService.LoginAsync(loginModel);
+
+        if (error != null || response == null)
+        {
+            errorMessage = error ?? "Giriş yapılamadı.";
+        }
+        else
+        {
+            await AuthStateProvider.LoginAsync(response.Token);
+            NavigationManager.NavigateTo("/", forceLoad: true);
+        }
+
+        isLoading = false;
+    }
+}

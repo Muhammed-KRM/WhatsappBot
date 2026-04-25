@@ -3,9 +3,10 @@ namespace CafeBot.Data.Entities;
 /// <summary>
 /// Her API endpoint isteğini kaydeden log entity'si (OZELDERS pattern)
 /// </summary>
-public class EndpointLog
+public class EndpointLog : ITenantEntity
 {
     public int Id { get; set; }
+    public string UserId { get; set; } = string.Empty;
     public string? TraceId { get; set; }
     public string Method { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;

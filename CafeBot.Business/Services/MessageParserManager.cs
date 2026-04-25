@@ -2,6 +2,9 @@ using System.Text.RegularExpressions;
 using CafeBot.Business.DTOs;
 using CafeBot.Business.Infrastructure.AI;
 using CafeBot.Business.Interfaces;
+using CafeBot.Data.Context;
+using CafeBot.Data.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace CafeBot.Business.Services;
@@ -11,6 +14,8 @@ public class MessageParserManager : IMessageParserService
     private readonly GeminiClient _geminiClient;
     private readonly ILogService _logService;
     private readonly ILogger<MessageParserManager> _logger;
+    private readonly AppDbContext _dbContext;
+    private readonly ICurrentUserService _currentUserService;
 
     private static readonly string[] ShiftKeywords =
     [
@@ -33,11 +38,22 @@ public class MessageParserManager : IMessageParserService
         @"(\d{1,2})\s*(?:kişi|kişiye|kişilik|adam|eleman|çalışan)\s*(?:saat\s*)?(\d{1,2})[:\.]?(?:00)?",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public MessageParserManager(GeminiClient geminiClient, ILogService logService, ILogger<MessageParserManager> logger)
+    private readonly IConfigService _configService;
+
+    public MessageParserManager(
+        GeminiClient geminiClient, 
+        ILogService logService, 
+        ILogger<MessageParserManager> logger,
+        AppDbContext dbContext,
+        ICurrentUserService currentUserService,
+        IConfigService configService)
     {
         _geminiClient = geminiClient ?? throw new ArgumentNullException(nameof(geminiClient));
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
+        _currentUserService = currentUserService ?? throw new ArgumentNullException(nameof(currentUserService));
+        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
     }
 
     public bool IsShiftMessage(string messageText)
@@ -47,15 +63,41 @@ public class MessageParserManager : IMessageParserService
         return ShiftKeywords.Any(keyword => lowerText.Contains(keyword));
     }
 
-    public async Task<List<ShiftSlotDto>?> ParseShiftMessageAsync(string messageText)
+    public async Task<List<ShiftSlotDto>?> ParseShiftMessageAsync(string messageText, string? groupId = null)
     {
         if (string.IsNullOrWhiteSpace(messageText)) return null;
 
-        // 1. Önce Gemini ile dene
+        // 1. Kullanıcının özel Gemini API Key'ini al (eğer varsa)
+        string? apiKeyOverride = null;
+        var userId = _currentUserService.UserId;
+        if (!string.IsNullOrEmpty(userId))
+        {
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId);
+            if (!string.IsNullOrWhiteSpace(user?.PersonalGeminiApiKey))
+            {
+                apiKeyOverride = user.PersonalGeminiApiKey;
+            }
+        }
+
+        // 2. Kullanıcının özel yapay zeka komutunu (prompt) al
+        string? aiSystemPromptOverride = null;
+        if (!string.IsNullOrEmpty(groupId))
+        {
+            var groupSettings = await _configService.GetGroupSettingsAsync(groupId);
+            aiSystemPromptOverride = groupSettings.AiSystemPrompt;
+        }
+        
+        if (string.IsNullOrEmpty(aiSystemPromptOverride))
+        {
+            var config = await _configService.GetConfigAsync();
+            aiSystemPromptOverride = config.AiSystemPrompt;
+        }
+
+        // 3. Önce Gemini ile dene
         List<ShiftSlotDto>? geminiResult = null;
         try
         {
-            var parseResult = await _geminiClient.ParseShiftMessageAsync(messageText);
+            var parseResult = await _geminiClient.ParseShiftMessageAsync(messageText, apiKeyOverride, aiSystemPromptOverride);
 
             if (parseResult != null && parseResult.IsShiftMessage && parseResult.Slots.Count > 0)
             {

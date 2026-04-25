@@ -26,13 +26,16 @@ public class LogManager : ILogService
     {
         try
         {
+            var maskedRequest = MaskSensitiveData(entry.RequestBody);
             var log = new EndpointLog
             {
                 TraceId      = entry.TraceId,
                 Method       = entry.Method,
                 Path         = entry.Path,
                 Query        = entry.Query,
-                RequestBody  = MaskSensitiveData(entry.RequestBody),
+                RequestBody  = maskedRequest?.Length > 3000
+                    ? maskedRequest[..3000] + "...[truncated]"
+                    : maskedRequest,
                 ResponseBody = entry.ResponseBody?.Length > 3000
                     ? entry.ResponseBody[..3000] + "...[truncated]"
                     : entry.ResponseBody,
