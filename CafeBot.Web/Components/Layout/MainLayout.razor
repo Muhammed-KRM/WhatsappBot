@@ -1,4 +1,13 @@
 @inherits LayoutComponentBase
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+@using Microsoft.AspNetCore.SignalR.Client
+
+<!-- Bağlantı Durumu Alert'i -->
+<div id="connection-alert" class="alert alert-dismissible" style="display:none; position:fixed; top:70px; right:20px; z-index:9999; min-width:300px;">
+    <span id="connection-message"></span>
+    <button type="button" class="btn-close" onclick="document.getElementById('connection-alert').style.display='none'"></button>
+</div>
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
     <div class="container-fluid">
@@ -44,10 +53,92 @@
 @code {
     [Inject] private CafeBot.Web.Auth.TokenAuthenticationStateProvider AuthStateProvider { get; set; } = default!;
     [Inject] private NavigationManager NavigationManager { get; set; } = default!;
+    
+    private HubConnection? hubConnection;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await InitializeSignalR();
+        }
+    }
+
+    private async Task InitializeSignalR()
+    {
+        try
+        {
+            hubConnection = new HubConnectionBuilder()
+                .WithUrl(NavigationManager.ToAbsoluteUri("/hubs/activity"))
+                .WithAutomaticReconnect()
+                .Build();
+
+            // WhatsApp bağlantısı koptu bildirimi
+            hubConnection.On<object>("WhatsAppConnectionLost", async (data) =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    await ShowConnectionAlert("danger", "⚠️ WhatsApp bağlantısı koptu! Lütfen QR kodu ile yeniden bağlanın.");
+                    await RequestNotificationPermission();
+                    await ShowBrowserNotification("CafeBot - Bağlantı Koptu!", "WhatsApp bağlantısı kesildi. Lütfen yeniden bağlanın.");
+                });
+            });
+
+            // WhatsApp bağlantısı kuruldu bildirimi
+            hubConnection.On<object>("WhatsAppConnectionRestored", async (data) =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    await ShowConnectionAlert("success", "✅ WhatsApp bağlantısı yeniden kuruldu!");
+                    await ShowBrowserNotification("CafeBot - Bağlantı Kuruldu!", "WhatsApp bağlantısı başarıyla yeniden kuruldu.");
+                });
+            });
+
+            // Genel bağlantı durumu değişiklikleri
+            hubConnection.On<object>("ConnectionStatusChanged", async (data) =>
+            {
+                await InvokeAsync(() =>
+                {
+                    // Bu bildirim sadece log için, kullanıcıya gösterilmeyecek
+                    Console.WriteLine($"Bağlantı durumu değişti: {data}");
+                    return Task.CompletedTask;
+                });
+            });
+
+            await hubConnection.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"SignalR bağlantısı kurulamadı: {ex.Message}");
+        }
+    }
+
+    private async Task ShowConnectionAlert(string type, string message)
+    {
+        await JS.InvokeVoidAsync("showConnectionAlert", type, message);
+    }
+
+    private async Task RequestNotificationPermission()
+    {
+        await JS.InvokeVoidAsync("requestNotificationPermission");
+    }
+
+    private async Task ShowBrowserNotification(string title, string body)
+    {
+        await JS.InvokeVoidAsync("showBrowserNotification", title, body);
+    }
 
     private async Task Logout()
     {
         await AuthStateProvider.LogoutAsync();
         NavigationManager.NavigateTo("/login", forceLoad: true);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
     }
 }

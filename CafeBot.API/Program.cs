@@ -12,6 +12,10 @@ using CafeBot.Data.Entities;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// UTF-8 encoding ayarları
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+Console.OutputEncoding = Encoding.UTF8;
+
 // === 1. VERİTABANI (Data Layer) ===
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection yapılandırması eksik.");
@@ -57,7 +61,20 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddBusinessServices(builder.Configuration);
 
 // === 3. CONTROLLERS ===
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        // UTF-8 encoding for JSON responses
+        options.SuppressConsumesConstraintForFormFileParameters = true;
+        options.SuppressInferBindingSourcesForParameters = true;
+        options.SuppressModelStateInvalidFilter = true;
+    });
+
+builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =>
+{
+    options.SerializerOptions.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+});
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -156,6 +173,9 @@ app.UseCors(app.Environment.IsDevelopment() ? "AllowAll" : "Production");
 // 4. Auth (şimdilik placeholder - ileride eklenebilir)
 app.UseAuthentication();
 app.UseAuthorization();
+
+// 4.1. API Key Required Middleware (after auth)
+app.UseMiddleware<ApiKeyRequiredMiddleware>();
 
 // 5. Controllers
 app.MapControllers();

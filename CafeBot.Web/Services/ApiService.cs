@@ -75,35 +75,127 @@ public class ApiService
 
     public async Task<(UserProfileDto? Data, string? Error)> GetProfileAsync()
     {
+        var traceId = Guid.NewGuid().ToString("N")[..8];
+        var stepOrder = 0;
+        
         try
         {
-            await EnsureAuthHeader(); var response = await _httpClient.GetAsync("api/user/profile");
+            _logger.LogInformation("🔍 [TRACE:{TraceId}] GetProfileAsync başladı", traceId);
+            
+            // Step 1: Auth header hazırlama
+            stepOrder++;
+            await LogProcessStep(traceId, stepOrder, "Auth Header Hazırlama", "EnsureAuthHeader", null, null, "BAŞLADI");
+            await EnsureAuthHeader();
+            await LogProcessStep(traceId, stepOrder, "Auth Header Hazırlama", "EnsureAuthHeader", null, "Auth header hazırlandı", "TAMAMLANDI");
+            
+            // Step 2: API isteği gönderme
+            stepOrder++;
+            await LogProcessStep(traceId, stepOrder, "API İsteği", "HttpClient.GetAsync", "api/user/profile", null, "BAŞLADI");
+            _logger.LogInformation("📡 [TRACE:{TraceId}] /api/user/profile endpoint'ine istek gönderiliyor", traceId);
+            var response = await _httpClient.GetAsync("api/user/profile");
+            
+            _logger.LogInformation($"📡 [TRACE:{traceId}] Response alındı - StatusCode: {response.StatusCode}");
+            await LogProcessStep(traceId, stepOrder, "API İsteği", "HttpClient.GetAsync", "api/user/profile", $"StatusCode: {response.StatusCode}", response.IsSuccessStatusCode ? "BAŞARILI" : "HATA");
+            
             if (response.IsSuccessStatusCode)
             {
+                // Step 3: Response parsing
+                stepOrder++;
+                await LogProcessStep(traceId, stepOrder, "Response Parsing", "ReadFromJsonAsync", null, null, "BAŞLADI");
                 var data = await response.Content.ReadFromJsonAsync<UserProfileDto>();
+                
+                var hasApiKey = !string.IsNullOrWhiteSpace(data?.PersonalGeminiApiKey);
+                var resultSummary = $"Email: {data?.Email}, HasApiKey: {hasApiKey}";
+                if (hasApiKey && data?.PersonalGeminiApiKey != null)
+                {
+                    resultSummary += $", ApiKeyLength: {data.PersonalGeminiApiKey.Length}";
+                }
+                
+                _logger.LogInformation($"✅ [TRACE:{traceId}] Profil başarıyla alındı - {resultSummary}");
+                await LogProcessStep(traceId, stepOrder, "Response Parsing", "ReadFromJsonAsync", null, resultSummary, "BAŞARILI");
+                
+                if (hasApiKey && data?.PersonalGeminiApiKey != null)
+                {
+                    _logger.LogInformation("🔑 [TRACE:{TraceId}] API Key mevcut - Uzunluk: {Length} karakter", traceId, data.PersonalGeminiApiKey.Length);
+                }
+                else
+                {
+                    _logger.LogInformation("❌ [TRACE:{TraceId}] API Key mevcut değil veya boş", traceId);
+                }
+                
+                // Step 4: Sonuç döndürme
+                stepOrder++;
+                await LogProcessStep(traceId, stepOrder, "Sonuç Döndürme", "Return Success", resultSummary, "Success", "TAMAMLANDI");
+                
                 return (data, null);
             }
+            
+            var errorContent = await response.Content.ReadAsStringAsync();
+            _logger.LogError("❌ [TRACE:{TraceId}] GetProfileAsync başarısız - StatusCode: {StatusCode}, Content: {Content}", traceId, response.StatusCode, errorContent);
+            
+            stepOrder++;
+            await LogProcessStep(traceId, stepOrder, "Hata İşleme", "Error Response", $"StatusCode: {response.StatusCode}", errorContent, "HATA");
+            
             return (null, $"Profil alınamadı: {response.StatusCode}");
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "💥 [TRACE:{TraceId}] GetProfileAsync exception", traceId);
+            
+            stepOrder++;
+            await LogProcessStep(traceId, stepOrder, "Exception Handling", "Exception Catch", null, ex.Message, "EXCEPTION");
+            
             return (null, $"Profil alınamadı: {ex.Message}");
         }
     }
 
-    public async Task<(bool Success, string? Error)> UpdateProfileAsync(UpdateUserProfileDto dto)
+    private async Task LogProcessStep(string traceId, int stepOrder, string stepName, string functionName, string? input, string? output, string status)
     {
         try
         {
-            await EnsureAuthHeader(); var response = await _httpClient.PutAsJsonAsync("api/user/profile", dto);
+            // Bu basit bir HTTP client log'u olduğu için sadece console'a yazalım
+            // Gerçek ProcessLog için backend'e istek atmamız gerekir ama bu circular dependency yaratabilir
+            _logger.LogInformation($"[PROCESS-{traceId}] Step {stepOrder}: {stepName} | {functionName} | Status: {status} | Input: {input} | Output: {output}");
+        }
+        catch
+        {
+            // Logging hatası uygulamayı etkilememelidir
+        }
+    }
+
+    public async Task<(bool Success, string? Error, bool? HasApiKey)> UpdateProfileAsync(UpdateUserProfileDto dto)
+    {
+        try
+        {
+            await EnsureAuthHeader(); 
+            var response = await _httpClient.PutAsJsonAsync("api/user/profile", dto);
             if (response.IsSuccessStatusCode)
-                return (true, null);
+            {
+                // API'den gelen response'u parse et
+                var responseContent = await response.Content.ReadAsStringAsync();
+                try
+                {
+                    var result = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+                    if (result != null && result.ContainsKey("HasApiKey"))
+                    {
+                        var hasApiKey = Convert.ToBoolean(result["HasApiKey"]);
+                        _logger.LogInformation("Profile updated successfully. HasApiKey: {HasApiKey}", hasApiKey);
+                        return (true, null, hasApiKey);
+                    }
+                }
+                catch (Exception parseEx)
+                {
+                    _logger.LogWarning(parseEx, "Could not parse update profile response: {Response}", responseContent);
+                }
                 
-            return (false, $"Güncelleme başarısız: {response.StatusCode}");
+                return (true, null, null);
+            }
+                
+            return (false, $"Güncelleme başarısız: {response.StatusCode}", null);
         }
         catch (Exception ex)
         {
-            return (false, $"Güncelleme hatası: {ex.Message}");
+            return (false, $"Güncelleme hatası: {ex.Message}", null);
         }
     }
 
@@ -213,6 +305,7 @@ public class ApiService
             return $"Grup kaydedilemedi: {ex.Message}";
         }
     }
+
 
     public async Task<string?> UpdateAiPrompt(string? prompt)
     {
@@ -483,6 +576,107 @@ public class ApiService
         {
             _logger.LogError(ex, "GetProcessTrace failed");
             return (null, ex.Message);
+        }
+    }
+
+    // ===== API KEY METHODS =====
+
+    public async Task<(bool IsValid, string? Error)> ValidateApiKeyAsync(string apiKey)
+    {
+        try
+        {
+            await EnsureAuthHeader();
+            var response = await _httpClient.PostAsJsonAsync("api/user/validate-api-key", new { ApiKey = apiKey });
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+                if (result != null)
+                {
+                    // JSON response'u daha güvenli parse et
+                    if (result.ContainsKey("isValid"))
+                    {
+                        var isValidValue = result["isValid"];
+                        bool isValid = false;
+                        
+                        // Farklı JSON value tiplerini handle et
+                        if (isValidValue is bool boolValue)
+                        {
+                            isValid = boolValue;
+                        }
+                        else if (isValidValue is string stringValue)
+                        {
+                            bool.TryParse(stringValue, out isValid);
+                        }
+                        else if (isValidValue != null)
+                        {
+                            bool.TryParse(isValidValue.ToString(), out isValid);
+                        }
+
+                        if (isValid)
+                        {
+                            return (true, null);
+                        }
+                        else
+                        {
+                            // Error mesajını al
+                            string? errorMsg = null;
+                            if (result.ContainsKey("error"))
+                            {
+                                errorMsg = result["error"]?.ToString();
+                            }
+                            else if (result.ContainsKey("message"))
+                            {
+                                errorMsg = result["message"]?.ToString();
+                            }
+                            return (false, errorMsg ?? "API anahtarı geçersiz.");
+                        }
+                    }
+                }
+            }
+            
+            var errorContent = await response.Content.ReadAsStringAsync();
+            return (false, $"API key doğrulanamadı: {response.StatusCode} - {errorContent}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ValidateApiKey failed");
+            return (false, $"API key doğrulama hatası: {ex.Message}");
+        }
+    }
+
+    public async Task<(bool HasApiKey, bool IsAdmin, bool CanUseSystemKey, string? Error)> CheckApiKeyStatusAsync()
+    {
+        try
+        {
+            await EnsureAuthHeader();
+            
+            // Cache'i bypass etmek için timestamp ekleyelim
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var response = await _httpClient.GetAsync($"api/user/has-valid-api-key?t={timestamp}");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+                if (result != null)
+                {
+                    var hasApiKey = result.ContainsKey("HasApiKey") ? Convert.ToBoolean(result["HasApiKey"]) : false;
+                    var isAdmin = result.ContainsKey("IsAdmin") ? Convert.ToBoolean(result["IsAdmin"]) : false;
+                    var canUseSystemKey = result.ContainsKey("CanUseSystemKey") ? Convert.ToBoolean(result["CanUseSystemKey"]) : false;
+                    
+                    _logger.LogInformation("API Key Status Check: HasApiKey={HasApiKey}, IsAdmin={IsAdmin}, CanUseSystemKey={CanUseSystemKey}", 
+                        hasApiKey, isAdmin, canUseSystemKey);
+                    
+                    return (hasApiKey, isAdmin, canUseSystemKey, null);
+                }
+            }
+            
+            _logger.LogWarning("API Key Status Check failed: {StatusCode}", response.StatusCode);
+            return (false, false, false, $"API key durumu kontrol edilemedi: {response.StatusCode}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CheckApiKeyStatus failed");
+            return (false, false, false, ex.Message);
         }
     }
 }

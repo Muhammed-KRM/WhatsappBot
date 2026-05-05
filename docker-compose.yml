@@ -56,6 +56,10 @@ services:
       - api_data:/app/data
     depends_on:
       - evolution-api
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
     restart: unless-stopped
 
   cafebot-worker:
@@ -77,6 +81,10 @@ services:
     depends_on:
       - evolution-api
       - cafebot-api
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
     restart: unless-stopped
 
   cafebot-web:

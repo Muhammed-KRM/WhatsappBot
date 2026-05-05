@@ -1,0 +1,207 @@
+@page "/api-key-setup"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CafeBot.Web.Services
+@inject ApiService ApiService
+@inject IJSRuntime JS
+@inject NavigationManager NavigationManager
+
+<PageTitle>API Anahtarı Kurulumu - CafeBot</PageTitle>
+
+<div class="container" style="max-width: 800px;">
+    <div class="row justify-content-center">
+        <div class="col-12">
+            <div class="card shadow-lg border-0">
+                <div class="card-header bg-primary text-white text-center py-4">
+                    <h2 class="mb-0">🔑 API Anahtarı Kurulumu</h2>
+                    <p class="mb-0 mt-2">CafeBot'u kullanmaya başlamak için son adım!</p>
+                </div>
+                <div class="card-body p-5">
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            @errorMessage
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(successMessage))
+                    {
+                        <div class="alert alert-success">
+                            <i class="bi bi-check-circle me-2"></i>
+                            @successMessage
+                        </div>
+                    }
+
+                    <div class="mb-4">
+                        <div class="alert alert-info">
+                            <h5><i class="bi bi-info-circle me-2"></i>Neden API Anahtarı Gerekiyor?</h5>
+                            <p class="mb-0">CafeBot, WhatsApp mesajlarını anlamak için Google Gemini AI kullanır. Kendi ücretsiz API anahtarınızı kullanarak:</p>
+                            <ul class="mt-2 mb-0">
+                                <li>✅ Sınırsız kullanım (aylık 1000 istek)</li>
+                                <li>✅ Daha hızlı yanıt süreleri</li>
+                                <li>✅ Kişisel veri güvenliği</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <EditForm Model="apiKeyModel" OnValidSubmit="ValidateAndSaveApiKey">
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">Google Gemini API Anahtarınız</label>
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="bi bi-key"></i></span>
+                                <InputText @bind-Value="apiKeyModel.ApiKey" 
+                                          type="password" 
+                                          class="form-control" 
+                                          placeholder="AIzaSy..." 
+                                          required />
+                            </div>
+                            <small class="form-text text-muted">
+                                API anahtarınız güvenli şekilde şifrelenerek saklanır ve sadece sizin hesabınızda kullanılır.
+                            </small>
+                        </div>
+
+                        <div class="d-flex gap-3 mb-4">
+                            <button type="submit" class="btn btn-primary px-4" disabled="@isValidating">
+                                @if (isValidating)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-2"></span>
+                                    <span>Doğrulanıyor...</span>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-check-circle me-2"></i>
+                                    <span>Doğrula ve Kaydet</span>
+                                }
+                            </button>
+                            
+                            <button type="button" class="btn btn-outline-info" @onclick="OpenApiKeyGuide">
+                                <i class="bi bi-question-circle me-2"></i>
+                                API Anahtarı Nasıl Alınır?
+                            </button>
+                        </div>
+                    </EditForm>
+
+                    <div class="border-top pt-4">
+                        <h5>📋 API Anahtarı Alma Adımları</h5>
+                        <ol class="list-group list-group-numbered">
+                            <li class="list-group-item d-flex justify-content-between align-items-start">
+                                <div class="ms-2 me-auto">
+                                    <div class="fw-bold">Google AI Studio'ya Git</div>
+                                    <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-decoration-none">
+                                        aistudio.google.com/app/apikey <i class="bi bi-box-arrow-up-right"></i>
+                                    </a>
+                                </div>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between align-items-start">
+                                <div class="ms-2 me-auto">
+                                    <div class="fw-bold">Google Hesabınızla Giriş Yapın</div>
+                                    Gmail hesabınızla giriş yapın
+                                </div>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between align-items-start">
+                                <div class="ms-2 me-auto">
+                                    <div class="fw-bold">"Create API Key" Butonuna Tıklayın</div>
+                                    Yeni bir API anahtarı oluşturun
+                                </div>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between align-items-start">
+                                <div class="ms-2 me-auto">
+                                    <div class="fw-bold">API Anahtarını Kopyalayın</div>
+                                    "AIzaSy..." ile başlayan anahtarı kopyalayıp yukarıdaki alana yapıştırın
+                                </div>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private ApiKeyModel apiKeyModel = new();
+    private bool isValidating = false;
+    private string? errorMessage;
+    private string? successMessage;
+
+    private class ApiKeyModel
+    {
+        public string ApiKey { get; set; } = string.Empty;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Kullanıcının zaten API key'i varsa dashboard'a yönlendir
+        var (hasApiKey, isAdmin, canUseSystemKey, error) = await ApiService.CheckApiKeyStatusAsync();
+        if (hasApiKey || canUseSystemKey)
+        {
+            NavigationManager.NavigateTo("/");
+        }
+    }
+
+    private async Task ValidateAndSaveApiKey()
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyModel.ApiKey))
+        {
+            errorMessage = "Lütfen API anahtarınızı girin.";
+            return;
+        }
+
+        isValidating = true;
+        errorMessage = null;
+        successMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            // Önce API key'i doğrula
+            var (isValid, validateError) = await ApiService.ValidateApiKeyAsync(apiKeyModel.ApiKey);
+            
+            if (!isValid)
+            {
+                errorMessage = validateError ?? "API anahtarı geçersiz. Lütfen doğru anahtarı girdiğinizden emin olun.";
+                return;
+            }
+
+            // API key geçerliyse profili güncelle
+            var updateResult = await ApiService.UpdateProfileAsync(new UpdateUserProfileDto
+            {
+                PersonalGeminiApiKey = apiKeyModel.ApiKey
+            });
+
+            if (updateResult.Success)
+            {
+                successMessage = "✅ API anahtarınız başarıyla kaydedildi! Dashboard'a yönlendiriliyorsunuz...";
+                StateHasChanged();
+                
+                // Eğer API'den HasApiKey bilgisi geldiyse, bunu logla
+                if (updateResult.HasApiKey.HasValue)
+                {
+                    Console.WriteLine($"API Key saved successfully. HasApiKey: {updateResult.HasApiKey.Value}");
+                }
+                
+                // Kısa bir bekleme sonrası yönlendir - replace: true kullanarak cache'i temizle
+                await Task.Delay(1500);
+                NavigationManager.NavigateTo("/", replace: true, forceLoad: true);
+            }
+            else
+            {
+                errorMessage = updateResult.Error ?? "API anahtarı kaydedilirken bir hata oluştu.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Bir hata oluştu: {ex.Message}";
+        }
+        finally
+        {
+            isValidating = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenApiKeyGuide()
+    {
+        await JS.InvokeVoidAsync("window.open", "https://aistudio.google.com/app/apikey", "_blank");
+    }
+}

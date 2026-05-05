@@ -57,6 +57,21 @@ public static class DependencyInjection
         services.AddHttpClient(nameof(GeminiClient), client =>
         {
             client.Timeout = TimeSpan.FromSeconds(60);
+            
+            // Configure for Docker/hosting provider compatibility
+            client.DefaultRequestHeaders.UserAgent.Clear();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36");
+            client.DefaultRequestHeaders.Add("Accept", "application/json");
+            client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+            client.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
+        {
+            // Configure DNS and connection settings for Docker environments
+            UseCookies = false,
+            UseDefaultCredentials = false,
+            // Disable automatic decompression to avoid potential issues
+            AutomaticDecompression = System.Net.DecompressionMethods.None
         })
         .AddPolicyHandler(GetRetryPolicy())
         .AddPolicyHandler(GetTimeoutPolicy());
@@ -68,11 +83,11 @@ public static class DependencyInjection
             var httpClient = httpClientFactory.CreateClient(nameof(GeminiClient));
 
             var baseUrl = configuration["Gemini:BaseUrl"]
-                ?? "https://generativelanguage.googleapis.com/v1beta";
+                ?? "https://generativelanguage.googleapis.com";
             var apiKey = configuration["Gemini:ApiKey"]
                 ?? throw new InvalidOperationException("Gemini:ApiKey is not configured");
             var model = configuration["Gemini:Model"]
-                ?? "gemini-1.5-flash";
+                ?? "gemini-2.5-flash"; // Updated to working model
 
             return new GeminiClient(httpClient, baseUrl, apiKey, model);
         });

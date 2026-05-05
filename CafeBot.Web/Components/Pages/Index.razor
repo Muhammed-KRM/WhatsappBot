@@ -3,330 +3,396 @@
 @using CafeBot.Business.DTOs
 @using CafeBot.Data.Enums
 @inject ApiService ApiService
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JSRuntime
+@inject ILogger<Index> Logger
+@implements IDisposable
 
 <PageTitle>CafeBot Dashboard</PageTitle>
 
-<div class="container">
-    <h2 class="mb-4">CafeBot Dashboard</h2>
-
-    @if (!string.IsNullOrEmpty(errorMessage))
-    {
-        <div class="alert alert-danger alert-dismissible">
-            @errorMessage
-            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
-        </div>
-    }
-
-    @if (!string.IsNullOrEmpty(successMessage))
-    {
-        <div class="alert alert-success alert-dismissible">
-            @successMessage
-            <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
-        </div>
-    }
-
-    @if (showApiKeyGuide)
-    {
-        <div class="card border-warning shadow mb-4">
-            <div class="card-header bg-warning text-dark fw-bold">
-                <i class="bi bi-key-fill me-2"></i> Gemini API Anahtari Gerekli
+<AuthorizeView>
+    <NotAuthorized>
+        <!-- Giriş yapmamış kullanıcılar için hero section -->
+        <div class="hero-section bg-primary text-white py-5 mb-5">
+            <div class="container text-center">
+                <div class="row justify-content-center">
+                    <div class="col-lg-8">
+                        <h1 class="display-4 fw-bold mb-4">
+                            <span class="me-3">☕</span>CafeBot
+                        </h1>
+                        <p class="lead mb-4">
+                            WhatsApp gruplarınızdaki vardiya mesajlarını otomatik olarak algılayıp, 
+                            belirlediğiniz öncelik sırasına göre uygun saati yanıtlayan akıllı otomasyon sistemi.
+                        </p>
+                        <div class="d-flex gap-3 justify-content-center flex-wrap">
+                            <a href="/login" class="btn btn-light btn-lg px-4">
+                                <i class="bi bi-box-arrow-in-right me-2"></i>
+                                Giriş Yap
+                            </a>
+                            <a href="/register" class="btn btn-outline-light btn-lg px-4">
+                                <i class="bi bi-person-plus me-2"></i>
+                                Kayıt Ol
+                            </a>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body">
-                <p class="text-danger fw-bold">Servisi baslatmadan once Gemini API anahtarinizi girmeniz gerekmektedir. Bu anahtar olmadan bot vardiya mesajlarini anlayamaz.</p>
-                
-                <div class="accordion" id="apiKeyGuide">
-                    <div class="accordion-item">
-                        <h2 class="accordion-header">
-                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#step1">
-                                Adim 1: Google AI Studio sayfasina gidin
-                            </button>
-                        </h2>
-                        <div id="step1" class="accordion-collapse collapse show" data-bs-parent="#apiKeyGuide">
-                            <div class="accordion-body">
-                                <p>Asagidaki linke tiklayarak Google AI Studio sayfasina gidin ve Google hesabinizla giris yapin.</p>
-                                <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn btn-outline-primary">
-                                    <i class="bi bi-box-arrow-up-right me-1"></i> Google AI Studio - API Key Sayfasi
-                                </a>
+        </div>
+
+        <!-- Özellikler bölümü -->
+        <div class="container mb-5">
+            <div class="row">
+                <div class="col-lg-4 mb-4">
+                    <div class="card h-100 border-0 shadow-sm">
+                        <div class="card-body text-center p-4">
+                            <div class="bg-primary text-white rounded-circle d-inline-flex align-items-center justify-content-center mb-3" style="width: 60px; height: 60px;">
+                                <i class="bi bi-robot" style="font-size: 1.5rem;"></i>
                             </div>
+                            <h5 class="card-title">Yapay Zeka Destekli</h5>
+                            <p class="card-text text-muted">Google Gemini AI ile WhatsApp mesajlarını anlayıp otomatik yanıt verir.</p>
                         </div>
                     </div>
-                    <div class="accordion-item">
-                        <h2 class="accordion-header">
-                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#step2">
-                                Adim 2: Yeni API Anahtari Olusturun
-                            </button>
-                        </h2>
-                        <div id="step2" class="accordion-collapse collapse" data-bs-parent="#apiKeyGuide">
-                            <div class="accordion-body">
-                                <p><strong>"Create API Key"</strong> (API Anahtari Olustur) butonuna basin. Bir proje secmeniz istenebilir; "Create API key in new project" secenegini secin.</p>
+                </div>
+                <div class="col-lg-4 mb-4">
+                    <div class="card h-100 border-0 shadow-sm">
+                        <div class="card-body text-center p-4">
+                            <div class="bg-success text-white rounded-circle d-inline-flex align-items-center justify-content-center mb-3" style="width: 60px; height: 60px;">
+                                <i class="bi bi-clock" style="font-size: 1.5rem;"></i>
                             </div>
+                            <h5 class="card-title">Öncelik Sistemi</h5>
+                            <p class="card-text text-muted">Kendi öncelik listenizi oluşturun, bot en uygun saati otomatik seçsin.</p>
                         </div>
                     </div>
-                    <div class="accordion-item">
-                        <h2 class="accordion-header">
-                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#step3">
-                                Adim 3: Anahtari Kopyalayin
-                            </button>
-                        </h2>
-                        <div id="step3" class="accordion-collapse collapse" data-bs-parent="#apiKeyGuide">
-                            <div class="accordion-body">
-                                <p>Olusan <code>AIzaSy...</code> ile baslayan anahtari kopyalayin.</p>
+                </div>
+                <div class="col-lg-4 mb-4">
+                    <div class="card h-100 border-0 shadow-sm">
+                        <div class="card-body text-center p-4">
+                            <div class="bg-info text-white rounded-circle d-inline-flex align-items-center justify-content-center mb-3" style="width: 60px; height: 60px;">
+                                <i class="bi bi-shield-check" style="font-size: 1.5rem;"></i>
                             </div>
+                            <h5 class="card-title">Güvenli & Hızlı</h5>
+                            <p class="card-text text-muted">Kendi API anahtarınızla güvenli, hızlı ve kesintisiz kullanım.</p>
                         </div>
                     </div>
-                    <div class="accordion-item">
-                        <h2 class="accordion-header">
-                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#step4">
-                                Adim 4: CafeBot Profilinize Yapi�tirin
-                            </button>
-                        </h2>
-                        <div id="step4" class="accordion-collapse collapse" data-bs-parent="#apiKeyGuide">
-                            <div class="accordion-body">
-                                <p>Kopyaladiginiz anahtari CafeBot <strong>Profil ve Ayarlar</strong> sayfasindaki "Ozel Gemini API Anahtari" alanina yapistirin ve kaydedin.</p>
-                                <a href="/profile" class="btn btn-primary">
-                                    <i class="bi bi-person-gear me-1"></i> Profil Sayfasina Git
-                                </a>
+                </div>
+            </div>
+        </div>
+    </NotAuthorized>
+    <Authorized>
+        <!-- Giriş yapmış kullanıcılar için dashboard -->
+        <div class="container">
+            <h2 class="mb-4">CafeBot Dashboard</h2>
+
+            @if (isLoading)
+            {
+                <div class="text-center my-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Yükleniyor...</span>
+                    </div>
+                    <p class="mt-2 text-muted">Dashboard yükleniyor...</p>
+                </div>
+            }
+            else if (showApiKeyRequired)
+            {
+                <!-- API Key Gerekli Uyarısı -->
+                <div class="alert alert-warning border-0 shadow-sm">
+                    <div class="d-flex align-items-center">
+                        <i class="bi bi-exclamation-triangle-fill me-3" style="font-size: 1.5rem;"></i>
+                        <div class="flex-grow-1">
+                            <h5 class="alert-heading mb-1">API Anahtarı Gerekli</h5>
+                            <p class="mb-2">CafeBot'u kullanmak için Google Gemini API anahtarınızı girmeniz gerekiyor.</p>
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-warning btn-sm" @onclick="GoToApiKeySetup">
+                                    <i class="bi bi-key me-1"></i> API Anahtarını Ayarla
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm" @onclick="CheckApiKeyStatus">
+                                    <i class="bi bi-arrow-clockwise me-1"></i> Yenile
+                                </button>
                             </div>
                         </div>
                     </div>
                 </div>
-                
-                <div class="alert alert-info mt-3 mb-0">
-                    <i class="bi bi-info-circle me-1"></i>
-                    <strong>Not:</strong> Bu islem tamamen <strong>ucretsizdir</strong>. Google Gemini ucretsiz katmaninda dakikada 15 istek hakki vardir ve vardiya botu icin fazlasiyla yeterlidir.
-                </div>
-            </div>
-        </div>
-    }
-
-<div class="row g-4">
-    <!-- Sistem Durumu Karti -->
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header">
-                <strong>Sistem Durumu</strong>
-            </div>
-            <div class="card-body">
-                @if (isLoading)
+            }
+            else
+            {
+                <!-- Dashboard İçeriği -->
+                @if (!string.IsNullOrEmpty(errorMessage))
                 {
-                    <div class="text-center py-3">
-                        <div class="spinner-border spinner-border-sm text-primary"></div>
+                    <div class="alert alert-danger alert-dismissible">
+                        @errorMessage
+                        <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
                     </div>
                 }
-                else if (config != null)
-                {
-                    <table class="table table-borderless mb-0">
-                        <tbody>
-                            <tr>
-                                <td class="text-muted">WhatsApp Baglantisi</td>
-                                <td><StatusBadge ConnectionStatus="config.ConnectionStatus" /></td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Sistem Durumu</td>
-                                <td><StatusBadge SystemStatus="config.SystemStatus" /></td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Hedef Gruplar</td>
-                                <td>
-                                    @if (config.TargetGroupNames != null && config.TargetGroupNames.Count > 0)
-                                    {
-                                        <div class="d-flex flex-wrap gap-1">
-                                            @foreach (var group in config.TargetGroupNames)
-                                            {
-                                                <span class="badge bg-info text-dark">@group</span>
-                                            }
-                                        </div>
-                                    }
-                                    else
-                                    {
-                                        <span class="text-muted fst-italic">Secilmedi</span>
-                                    }
-                                </td>
-                            </tr>
-                            <tr>
-                                <td class="text-muted">Oncelik Listesi</td>
-                                <td>
-                                    @if (config.PriorityList.Count > 0)
-                                    {
-                                        <span>@string.Join(" > ", config.PriorityList)</span>
-                                    }
-                                    else
-                                    {
-                                        <span class="text-muted fst-italic">Ayarlanmadi</span>
-                                    }
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                }
-            </div>
-        </div>
-    </div>
 
-    <!-- Kontrol Karti -->
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header">
-                <strong>Kontrol</strong>
-            </div>
-            <div class="card-body d-flex flex-column justify-content-center align-items-center">
+                @if (!string.IsNullOrEmpty(successMessage))
+                {
+                    <div class="alert alert-success alert-dismissible">
+                        @successMessage
+                        <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
+                    </div>
+                }
+
                 @if (config != null)
                 {
-                    @if (config.SystemStatus == SystemStatus.Running)
-                    {
-                        <div class="text-center">
-                            <div class="mb-3">
-                                <span style="font-size: 3rem;">&#x2705;</span>
+                    <div class="row">
+                        <div class="col-lg-8">
+                            <div class="card shadow mb-4">
+                                <div class="card-header py-3">
+                                    <h6 class="m-0 font-weight-bold text-primary">Sistem Durumu</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <h6>WhatsApp Bağlantısı</h6>
+                                            <span class="badge @(config.ConnectionStatus == ConnectionStatus.Connected ? "bg-success" : "bg-danger")">
+                                                @config.ConnectionStatus
+                                            </span>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <h6>Sistem Durumu</h6>
+                                            <span class="badge @(config.SystemStatus == SystemStatus.Running ? "bg-success" : "bg-warning")">
+                                                @config.SystemStatus
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <p class="text-success fw-bold">Sistem Aktif</p>
-                            <button class="btn btn-danger btn-lg"
-                                    @onclick="StopSystem"
-                                    disabled="@isActionLoading">
-                                @if (isActionLoading)
-                                {
-                                    <span class="spinner-border spinner-border-sm me-1"></span>
-                                }
-                                Durdur
-                            </button>
                         </div>
-                    }
-                    else
-                    {
-                        <div class="text-center">
-                            <div class="mb-3">
-                                <span style="font-size: 3rem;">&#x23F8;</span>
+                        <div class="col-lg-4">
+                            <div class="card shadow mb-4">
+                                <div class="card-header py-3">
+                                    <h6 class="m-0 font-weight-bold text-primary">Hızlı İşlemler</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="d-grid gap-2">
+                                        @if (config.SystemStatus == SystemStatus.Stopped)
+                                        {
+                                            <button class="btn btn-success btn-sm mb-2" @onclick="() => ToggleSystemStatus(SystemStatus.Running)">
+                                                <i class="bi bi-play-fill me-1"></i> Sistemi Başlat
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button class="btn btn-warning btn-sm mb-2" @onclick="() => ToggleSystemStatus(SystemStatus.Stopped)">
+                                                <i class="bi bi-stop-fill me-1"></i> Sistemi Durdur
+                                            </button>
+                                        }
+                                        <a href="/connection" class="btn btn-primary btn-sm">
+                                            <i class="bi bi-qr-code me-1"></i> QR Kod Al
+                                        </a>
+                                        <a href="/group-selection" class="btn btn-outline-primary btn-sm">
+                                            <i class="bi bi-people me-1"></i> Grup Seç
+                                        </a>
+                                        <a href="/priority" class="btn btn-outline-secondary btn-sm">
+                                            <i class="bi bi-list-ol me-1"></i> Öncelik Ayarla
+                                        </a>
+                                    </div>
+                                </div>
                             </div>
-                            <p class="text-muted">Sistem Pasif</p>
-                            <button class="btn btn-success btn-lg"
-                                    @onclick="StartSystem"
-                                    disabled="@isActionLoading">
-                                @if (isActionLoading)
-                                {
-                                    <span class="spinner-border spinner-border-sm me-1"></span>
-                                }
-                                Baslat
-                            </button>
                         </div>
-                    }
-                }
-            </div>
-        </div>
-    </div>
+                    </div>
 
-    <!-- Son Aktiviteler -->
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <strong>Son Aktiviteler</strong>
-                <a href="/activity" class="btn btn-sm btn-outline-secondary">Tumunu Gor</a>
-            </div>
-            <div class="card-body p-0">
-                @if (recentLogs == null || recentLogs.Count == 0)
-                {
-                    <div class="text-center py-3 text-muted">
-                        <p>Henuz aktivite kaydi yok.</p>
-                    </div>
+                    @if (recentLogs != null && recentLogs.Count > 0)
+                    {
+                        <div class="card shadow mb-4">
+                            <div class="card-header py-3">
+                                <h6 class="m-0 font-weight-bold text-primary">Son Aktiviteler</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-sm">
+                                        <thead>
+                                            <tr>
+                                                <th>Zaman</th>
+                                                <th>Tip</th>
+                                                <th>Mesaj</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var log in recentLogs)
+                                            {
+                                                <tr>
+                                                    <td>@log.Timestamp.ToString("HH:mm:ss")</td>
+                                                    <td>
+                                                        <span class="badge bg-secondary">@log.Type</span>
+                                                    </td>
+                                                    <td>@log.Message</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    }
                 }
-                else
-                {
-                    <div class="px-3">
-                        @foreach (var log in recentLogs)
-                        {
-                            <ActivityItem Log="@log" />
-                        }
-                    </div>
-                }
-            </div>
+            }
         </div>
-    </div>
-</div>
-</div>
+    </Authorized>
+</AuthorizeView>
 
 @code {
     private ConfigDto? config;
     private List<ActivityLogDto>? recentLogs;
     private string? errorMessage;
     private string? successMessage;
-    private bool isLoading;
-    private bool isActionLoading;
-    private bool showApiKeyGuide;
+    private bool isLoading = true;
+    private bool showApiKeyRequired = false;
+
+    protected override void OnInitialized()
+    {
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            await LoadData();
+            Logger.LogInformation("🚀 Index.OnAfterRenderAsync(firstRender=true) - CheckApiKeyStatus çağrılıyor");
+            await CheckApiKeyStatus();
+        }
+    }
+
+    private async void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        if (e.Location.EndsWith("/") || e.Location.EndsWith("/index"))
+        {
+            await InvokeAsync(CheckApiKeyStatus);
+        }
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+    }
+
+    private async Task CheckApiKeyStatus()
+    {
+        Logger.LogInformation("🔍 CheckApiKeyStatus BAŞLADI");
+
+        try
+        {
+            isLoading = true;
+            errorMessage = null;
+            successMessage = null;
+            StateHasChanged();
+
+            Logger.LogInformation("📡 GetProfileAsync çağrılıyor...");
+            var (profileData, profileError) = await ApiService.GetProfileAsync();
+
+            Logger.LogInformation("📡 GetProfileAsync döndü - Error: {Error}, Data: {Data}",
+                profileError ?? "null",
+                profileData == null ? "null" : $"Email={profileData.Email}");
+
+            if (!string.IsNullOrEmpty(profileError))
+            {
+                Logger.LogWarning("❌ Profil hatası: {Error}", profileError);
+                errorMessage = $"Profil alınamadı: {profileError}";
+                showApiKeyRequired = true;
+                return;
+            }
+
+            if (profileData == null)
+            {
+                Logger.LogWarning("❌ profileData null döndü");
+                errorMessage = "Profil bilgileri alınamadı.";
+                showApiKeyRequired = true;
+                return;
+            }
+
+            bool hasApiKey = !string.IsNullOrWhiteSpace(profileData.PersonalGeminiApiKey);
+            Logger.LogInformation("🔑 hasApiKey={HasApiKey}, ApiKeyLength={Length}",
+                hasApiKey,
+                profileData.PersonalGeminiApiKey?.Length ?? 0);
+
+            if (hasApiKey)
+            {
+                Logger.LogInformation("✅ API Key VAR - showApiKeyRequired=false, dashboard yükleniyor");
+                showApiKeyRequired = false;
+                await LoadDashboardData();
+            }
+            else
+            {
+                Logger.LogInformation("❌ API Key YOK - showApiKeyRequired=true");
+                showApiKeyRequired = true;
+            }
+
+            Logger.LogInformation("🏁 CheckApiKeyStatus TAMAMLANDI - showApiKeyRequired={Value}", showApiKeyRequired);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "💥 CheckApiKeyStatus EXCEPTION");
+            errorMessage = $"Hata: {ex.Message}";
+            showApiKeyRequired = true;
+        }
+        finally
+        {
+            isLoading = false;
             StateHasChanged();
         }
     }
 
-    private async Task LoadData()
+    private async Task LoadDashboardData()
     {
-        isLoading = true;
-
-        var configTask = ApiService.GetConfig();
-        var logsTask = ApiService.GetActivityLogs(1, 5);
-
-        await Task.WhenAll(configTask, logsTask);
-
-        var (configData, configError) = await configTask;
-        var (logsData, logsError) = await logsTask;
-
-        isLoading = false;
-
-        if (configError != null)
-            errorMessage = configError;
-        else
-            config = configData;
-
-        if (logsData != null)
-            recentLogs = logsData;
-    }
-
-    private async Task StartSystem()
-    {
-        isActionLoading = true;
-        errorMessage = null;
-        successMessage = null;
-        showApiKeyGuide = false;
-
-        // Gemini API Key kontrolu
-        var (profile, _) = await ApiService.GetProfileAsync();
-        if (profile == null || string.IsNullOrEmpty(profile.PersonalGeminiApiKey))
+        try
         {
-            showApiKeyGuide = true;
-            isActionLoading = false;
-            return;
+            var configTask = ApiService.GetConfig();
+            var logsTask = ApiService.GetActivityLogs(1, 5);
+            await Task.WhenAll(configTask, logsTask);
+
+            var (configData, configError) = await configTask;
+            var (logsData, logsError) = await logsTask;
+
+            if (configError != null) errorMessage = configError;
+            else config = configData;
+
+            if (logsError != null && string.IsNullOrEmpty(errorMessage)) errorMessage = logsError;
+            else if (logsData != null) recentLogs = logsData;
         }
-
-        var error = await ApiService.UpdateSystemStatus(SystemStatus.Running);
-        isActionLoading = false;
-
-        if (error != null)
-            errorMessage = error;
-        else
+        catch (Exception ex)
         {
-            successMessage = "Sistem baslatildi.";
-            await LoadData();
+            errorMessage = $"Dashboard verileri yüklenemedi: {ex.Message}";
         }
     }
 
-    private async Task StopSystem()
+    private void GoToApiKeySetup()
     {
-        isActionLoading = true;
-        errorMessage = null;
-        successMessage = null;
+        NavigationManager.NavigateTo("/api-key-setup");
+    }
 
-        var error = await ApiService.UpdateSystemStatus(SystemStatus.Stopped);
-        isActionLoading = false;
+    private async Task RefreshPage()
+    {
+        successMessage = "Yenileniyor...";
+        StateHasChanged();
+        await CheckApiKeyStatus();
+    }
 
-        if (error != null)
-            errorMessage = error;
-        else
+    private async Task LogToConsole(string message)
+    {
+        try { await JSRuntime.InvokeVoidAsync("console.log", $"[{DateTime.Now:HH:mm:ss.fff}] {message}"); }
+        catch { }
+    }
+
+    private async Task ToggleSystemStatus(SystemStatus newStatus)
+    {
+        try
         {
-            successMessage = "Sistem durduruldu.";
-            await LoadData();
+            var error = await ApiService.UpdateSystemStatus(newStatus);
+            if (error != null)
+            {
+                errorMessage = error;
+            }
+            else
+            {
+                successMessage = $"Sistem durumu '{newStatus}' olarak güncellendi.";
+                // Refresh config from server to get updated state
+                await LoadDashboardData();
+            }
         }
+        catch (Exception ex)
+        {
+            errorMessage = $"Hata: {ex.Message}";
+        }
+        StateHasChanged();
     }
 }
-

@@ -18,6 +18,7 @@ public class WhatsAppListenerService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WhatsAppListenerService> _logger;
+    private readonly ActivityHubService _activityHubService;
 
     // Son işlenen mesajın timestamp'i (duplicate önleme)
     // Başlangıçta son 5 dakikadaki mesajları da kontrol etmesi için 5 dakika geri çekiyoruz.
@@ -26,14 +27,19 @@ public class WhatsAppListenerService : BackgroundService
     // Daha önce görülen mesaj ID'leri (in-memory duplicate guard)
     private readonly HashSet<string> _seenMessageIds = new();
 
+    // Kullanıcı bazlı son bağlantı durumları
+    private readonly Dictionary<string, ConnectionStatus> _lastConnectionStatuses = new();
+
     private const int PollingIntervalSeconds = 5;
 
     public WhatsAppListenerService(
         IServiceScopeFactory scopeFactory,
-        ILogger<WhatsAppListenerService> logger)
+        ILogger<WhatsAppListenerService> logger,
+        ActivityHubService activityHubService)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _activityHubService = activityHubService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -64,13 +70,34 @@ public class WhatsAppListenerService : BackgroundService
                         
                         if (config.SystemStatus != SystemStatus.Running) continue;
 
-                        var oldStatus = config.ConnectionStatus;
+                        var oldStatus = _lastConnectionStatuses.GetValueOrDefault(user.Id, ConnectionStatus.Disconnected);
                         var currentStatus = await whatsAppService.GetConnectionStatusAsync();
 
-                        if (oldStatus == ConnectionStatus.Connected && currentStatus == ConnectionStatus.Disconnected)
+                        // Bağlantı durumu değişikliklerini izle ve bildir
+                        if (oldStatus != currentStatus)
                         {
-                            _logger.LogWarning("DİKKAT: Kullanıcı {Email} ({UserId}) için WhatsApp bağlantısı düştü! Bildirim tetikleniyor.", user.Email, user.Id);
-                            await notificationService.SendConnectionLostAlertAsync(config.SessionId ?? $"cafebot_{user.Id}", DateTime.UtcNow, user.Email!);
+                            _lastConnectionStatuses[user.Id] = currentStatus;
+                            
+                            if (oldStatus == ConnectionStatus.Connected && currentStatus == ConnectionStatus.Disconnected)
+                            {
+                                _logger.LogWarning("DİKKAT: Kullanıcı {Email} ({UserId}) için WhatsApp bağlantısı düştü! Bildirim tetikleniyor.", user.Email, user.Id);
+                                
+                                // SignalR ile real-time bildirim gönder
+                                await _activityHubService.NotifyConnectionLostAsync(user.Id, user.Email!, "WhatsApp bağlantısı kesildi");
+
+                                // Notification service ile de bildir
+                                await notificationService.SendConnectionLostAlertAsync(config.SessionId ?? $"cafebot_{user.Id}", DateTime.UtcNow, user.Email!);
+                            }
+                            else if (oldStatus == ConnectionStatus.Disconnected && currentStatus == ConnectionStatus.Connected)
+                            {
+                                _logger.LogInformation("✅ Kullanıcı {Email} ({UserId}) için WhatsApp bağlantısı yeniden kuruldu!", user.Email, user.Id);
+                                
+                                // SignalR ile bağlantı kuruldu bildirimi
+                                await _activityHubService.NotifyConnectionRestoredAsync(user.Id, user.Email!);
+                            }
+
+                            // Genel durum değişikliği bildirimi
+                            await _activityHubService.NotifyConnectionStatusAsync(currentStatus.ToString(), $"Kullanıcı: {user.Email}");
                         }
 
                         if (currentStatus == ConnectionStatus.Connected)

@@ -156,6 +156,7 @@ public class EvolutionApiClient
     /// <summary>
     /// V1: Bağlantı durumunu /instance/connectionState/:instance endpoint'inden alır
     /// Hızlı timeout ile - session yoksa hemen fail etsin
+    /// v1.8.6+ uyumlu - farklı response formatlarını destekler
     /// </summary>
     public async Task<SessionStatusResponse> GetSessionStatusAsync(string sessionName)
     {
@@ -175,27 +176,46 @@ public class EvolutionApiClient
             }
 
             var json = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"[EvolutionApiClient] Raw connectionState response: {json}");
 
             // V1 response: {"instance":{"instanceName":"...","state":"open"}}
+            // v1.8.6+ response: {"state":"open"} veya {"instance":{"connectionStatus":"open"}}
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;
 
             string? state = null;
 
-            // instance.state veya instance.connectionStatus dene
-            if (root.TryGetProperty("instance", out var instanceEl))
+            // Önce direkt state field'ı dene (v1.8.6+ yeni format)
+            if (root.TryGetProperty("state", out var directState))
+            {
+                state = directState.GetString();
+                Console.WriteLine($"[EvolutionApiClient] Found direct state: {state}");
+            }
+            // instance.state veya instance.connectionStatus dene (eski format)
+            else if (root.TryGetProperty("instance", out var instanceEl))
             {
                 if (instanceEl.TryGetProperty("state", out var stateEl))
+                {
                     state = stateEl.GetString();
+                    Console.WriteLine($"[EvolutionApiClient] Found instance.state: {state}");
+                }
                 else if (instanceEl.TryGetProperty("connectionStatus", out var connEl))
+                {
                     state = connEl.GetString();
+                    Console.WriteLine($"[EvolutionApiClient] Found instance.connectionStatus: {state}");
+                }
             }
 
-            // Direkt state field'ı dene
-            if (state == null && root.TryGetProperty("state", out var directState))
-                state = directState.GetString();
+            // State mapping - farklı sürümlerde farklı değerler olabilir
+            // "open" = bağlı, "close" = bağlı değil, "connecting" = bağlanıyor
+            if (state != null)
+            {
+                state = state.ToLower();
+                // "open" veya "connected" = bağlı
+                if (state == "connected") state = "open";
+            }
 
-            Console.WriteLine($"[EvolutionApiClient] Session {sessionName} state: {state ?? "unknown"}");
+            Console.WriteLine($"[EvolutionApiClient] Session {sessionName} final state: {state ?? "unknown"}");
             return new SessionStatusResponse { State = state ?? "close" };
         }
         catch (OperationCanceledException)
@@ -213,6 +233,7 @@ public class EvolutionApiClient
     /// <summary>
     /// Tüm grupları listeler — boş yanıt ve farklı JSON yapılarına dayanıklı
     /// Birden fazla endpoint dener ve bağlantı durumunu kontrol eder
+    /// v1.8.6 uyumlu - fetchAllGroups yerine daha güvenli endpoint kullanır
     /// </summary>
     public async Task<List<GroupResponse>> GetGroupsAsync(string sessionName)
     {
@@ -225,7 +246,8 @@ public class EvolutionApiClient
             var status = await GetSessionStatusAsync(sessionName);
             if (status.State != "open")
             {
-                throw new InvalidOperationException($"Session not connected: {status.State}");
+                Console.WriteLine($"[EvolutionApiClient] Session not connected: {status.State}. Gruplar alınamıyor.");
+                return new List<GroupResponse>();
             }
         }
         catch (Exception ex)
@@ -234,12 +256,14 @@ public class EvolutionApiClient
             // Devam et, belki grup listeleme çalışır
         }
 
-        // Birden fazla endpoint dene
+        // v1.8.6'da fetchAllGroups hata veriyor ("groups is not iterable")
+        // Daha güvenli endpoint'leri kullan
         var endpoints = new[]
         {
-            $"/group/fetchAllGroups/{sessionName}?getParticipants=false",
-            $"/instance/fetchGroups/{sessionName}",
-            $"/chat/findChats/{sessionName}"
+            // v1.8.6'da çalışan endpoint (POST ile)
+            $"/chat/findChats/{sessionName}",
+            // Fallback: Eski endpoint (GET ile, ama hata verebilir)
+            $"/instance/fetchGroups/{sessionName}"
         };
 
         foreach (var endpoint in endpoints)
@@ -247,18 +271,42 @@ public class EvolutionApiClient
             try
             {
                 Console.WriteLine($"[EvolutionApiClient] Trying endpoint: {endpoint}");
-                var response = await _httpClient.GetAsync(endpoint);
+                
+                HttpResponseMessage response;
+                if (endpoint.Contains("/chat/findChats"))
+                {
+                    // POST request with filter for groups only
+                    var requestBody = new
+                    {
+                        where = new
+                        {
+                            id = new { _regex = "@g.us$" } // Sadece gruplar (group JID'leri @g.us ile biter)
+                        }
+                    };
+                    var json = System.Text.Json.JsonSerializer.Serialize(requestBody);
+                    var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                    response = await _httpClient.PostAsync(endpoint, content);
+                }
+                else
+                {
+                    // GET request
+                    response = await _httpClient.GetAsync(endpoint);
+                }
                 
                 if (response.IsSuccessStatusCode)
                 {
-                    var json = await response.Content.ReadAsStringAsync();
-                    if (!string.IsNullOrWhiteSpace(json))
+                    var responseJson = await response.Content.ReadAsStringAsync();
+                    if (!string.IsNullOrWhiteSpace(responseJson))
                     {
-                        var groups = ParseGroupsFromJson(json);
+                        var groups = ParseGroupsFromJson(responseJson);
                         if (groups.Count > 0)
                         {
                             Console.WriteLine($"[EvolutionApiClient] Successfully fetched {groups.Count} groups from {endpoint}");
                             return groups;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[EvolutionApiClient] Endpoint {endpoint} returned 0 groups");
                         }
                     }
                 }
@@ -274,12 +322,13 @@ public class EvolutionApiClient
             }
         }
 
-        Console.WriteLine("[EvolutionApiClient] All endpoints failed, returning empty list");
+        Console.WriteLine("[EvolutionApiClient] All endpoints failed or returned 0 groups");
         return new List<GroupResponse>();
     }
 
     /// <summary>
     /// JSON'dan grup listesini parse eder - farklı formatları destekler
+    /// v1.8.6 uyumlu - chat/findChats response formatını da destekler
     /// </summary>
     private List<GroupResponse> ParseGroupsFromJson(string json)
     {
@@ -304,6 +353,8 @@ public class EvolutionApiClient
                     arrayElement = groupsEl;
                 else if (root.TryGetProperty("data", out var dataEl) && dataEl.ValueKind == System.Text.Json.JsonValueKind.Array)
                     arrayElement = dataEl;
+                else if (root.TryGetProperty("chats", out var chatsEl) && chatsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    arrayElement = chatsEl; // v1.8.6 chat/findChats response
                 else
                     return groups;
             }
@@ -314,20 +365,40 @@ public class EvolutionApiClient
 
             foreach (var item in arrayElement.EnumerateArray())
             {
+                // Grup ID'sini al (farklı field isimleri olabilir)
+                string? groupId = null;
+                if (item.TryGetProperty("id", out var idEl))
+                    groupId = idEl.GetString();
+                else if (item.TryGetProperty("remoteJid", out var jidEl))
+                    groupId = jidEl.GetString();
+                
+                // Sadece grup JID'lerini al (@g.us ile bitenler)
+                if (string.IsNullOrEmpty(groupId) || !groupId.EndsWith("@g.us"))
+                    continue;
+
+                // Grup ismini al (farklı field isimleri olabilir)
+                string? groupName = null;
+                if (item.TryGetProperty("subject", out var subEl))
+                    groupName = subEl.GetString();
+                else if (item.TryGetProperty("name", out var nameEl))
+                    groupName = nameEl.GetString();
+                else if (item.TryGetProperty("pushName", out var pushEl))
+                    groupName = pushEl.GetString();
+
                 var group = new GroupResponse
                 {
-                    Id = item.TryGetProperty("id", out var idEl) ? idEl.GetString() : null,
-                    Subject = item.TryGetProperty("subject", out var subEl) ? subEl.GetString() : null
+                    Id = groupId,
+                    Subject = groupName ?? groupId // Eğer isim yoksa ID'yi kullan
                 };
 
-                if (!string.IsNullOrEmpty(group.Id))
-                    groups.Add(group);
+                groups.Add(group);
             }
 
             if (groups.Count == 0)
             {
-                // Log the raw JSON if empty for debugging
-                Console.WriteLine($"[EvolutionApiClient] fetchAllGroups returned empty. Raw JSON: {json}");
+                // Log the raw JSON if empty for debugging (ilk 500 karakter)
+                var jsonPreview = json.Length > 500 ? json.Substring(0, 500) + "..." : json;
+                Console.WriteLine($"[EvolutionApiClient] Parse returned 0 groups. Raw JSON preview: {jsonPreview}");
             }
         }
         catch (Exception ex)

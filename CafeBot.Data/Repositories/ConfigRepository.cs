@@ -13,6 +13,7 @@ public class ConfigRepository : GenericRepository<Configuration>, IConfigReposit
     public async Task<Configuration?> GetConfigurationAsync()
     {
         // Configuration tablosunda tek kayıt olacak (Id = 1)
-        return await _dbSet.FirstOrDefaultAsync(c => c.Id == 1);
+        // AsNoTracking: DbContext cache'ini bypass et, her seferinde DB'den taze veri oku
+        return await _dbSet.AsNoTracking().FirstOrDefaultAsync(c => c.Id == 1);
     }
 }

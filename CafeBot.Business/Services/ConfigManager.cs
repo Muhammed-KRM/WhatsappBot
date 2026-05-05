@@ -23,13 +23,16 @@ public class ConfigManager : IConfigService
 
     public async Task<ConfigDto> GetConfigAsync()
     {
+        var traceId = Guid.NewGuid().ToString("N")[..8];
         try
         {
+            _logger.LogInformation("🔍 [TRACE:{TraceId}] ConfigManager.GetConfigAsync BAŞLADI", traceId);
+            
             var config = await _configRepository.GetConfigurationAsync();
 
             if (config == null)
             {
-                _logger.LogDebug("Yapılandırma bulunamadı, varsayılan değerler döndürülüyor.");
+                _logger.LogWarning("⚠️ [TRACE:{TraceId}] Yapılandırma bulunamadı, varsayılan değerler döndürülüyor.", traceId);
                 return new ConfigDto
                 {
                     SessionId = null,
@@ -42,11 +45,15 @@ public class ConfigManager : IConfigService
                 };
             }
 
-            return MapToDto(config);
+            var dto = MapToDto(config);
+            _logger.LogInformation("✅ [TRACE:{TraceId}] ConfigManager.GetConfigAsync TAMAMLANDI - SessionId: {SessionId}, ConnectionStatus: {Status}", 
+                traceId, dto.SessionId ?? "NULL", dto.ConnectionStatus);
+            
+            return dto;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Yapılandırma alınırken hata oluştu.");
+            _logger.LogError(ex, "❌ [TRACE:{TraceId}] ConfigManager.GetConfigAsync HATA", traceId);
             throw;
         }
     }
@@ -115,40 +122,63 @@ public class ConfigManager : IConfigService
 
     public async Task UpdateConnectionStatusAsync(ConnectionStatus status)
     {
+        var traceId = Guid.NewGuid().ToString("N")[..8];
         try
         {
+            _logger.LogInformation("🔄 [TRACE:{TraceId}] ConfigManager.UpdateConnectionStatusAsync BAŞLADI - Yeni Status: {Status}", traceId, status);
+            
             var config = await GetOrCreateConfigurationAsync();
+            
+            var oldStatus = config.ConnectionStatus;
+            _logger.LogInformation("📝 [TRACE:{TraceId}] Eski Status: {OldStatus} → Yeni Status: {NewStatus}", 
+                traceId, oldStatus, status);
 
             config.ConnectionStatus = status;
             config.LastUpdated = DateTime.UtcNow;
 
             _configRepository.Update(config);
             await _configRepository.SaveChangesAsync();
-            _logger.LogInformation("Bağlantı durumu güncellendi: {Status}", status);
+            
+            _logger.LogInformation("✅ [TRACE:{TraceId}] ConnectionStatus DB'ye yazıldı: {Status}", traceId, status);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Bağlantı durumu güncellenirken hata oluştu. Status: {Status}", status);
+            _logger.LogError(ex, "❌ [TRACE:{TraceId}] ConfigManager.UpdateConnectionStatusAsync HATA - Status: {Status}", traceId, status);
             throw;
         }
     }
 
     public async Task UpdateSessionIdAsync(string? sessionId)
     {
+        var traceId = Guid.NewGuid().ToString("N")[..8];
         try
         {
+            _logger.LogInformation("🔑 [TRACE:{TraceId}] ConfigManager.UpdateSessionIdAsync BAŞLADI - Yeni SessionId: {SessionId}", traceId, sessionId ?? "NULL");
+            
             var config = await GetOrCreateConfigurationAsync();
+            
+            var oldSessionId = config.SessionId;
+            _logger.LogInformation("📝 [TRACE:{TraceId}] Eski SessionId: {OldSessionId} → Yeni SessionId: {NewSessionId}", 
+                traceId, oldSessionId ?? "NULL", sessionId ?? "NULL");
 
             config.SessionId = sessionId;
             config.LastUpdated = DateTime.UtcNow;
 
             _configRepository.Update(config);
+            _logger.LogInformation("💾 [TRACE:{TraceId}] SaveChangesAsync çağrılıyor...", traceId);
+            
             await _configRepository.SaveChangesAsync();
-            _logger.LogInformation("Oturum ID güncellendi: {SessionId}", sessionId);
+            
+            _logger.LogInformation("✅ [TRACE:{TraceId}] SaveChangesAsync TAMAMLANDI - SessionId DB'ye yazıldı: {SessionId}", traceId, sessionId);
+            
+            // Doğrulama için hemen oku
+            var verifyConfig = await _configRepository.GetConfigurationAsync();
+            _logger.LogInformation("🔍 [TRACE:{TraceId}] DOĞRULAMA - DB'den okunan SessionId: {VerifySessionId}", 
+                traceId, verifyConfig?.SessionId ?? "NULL");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Oturum ID güncellenirken hata oluştu. SessionId: {SessionId}", sessionId);
+            _logger.LogError(ex, "❌ [TRACE:{TraceId}] ConfigManager.UpdateSessionIdAsync HATA - SessionId: {SessionId}", traceId, sessionId);
             throw;
         }
     }

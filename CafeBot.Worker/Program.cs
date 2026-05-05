@@ -57,6 +57,9 @@ builder.Services.AddSingleton<HubConnection>(serviceProvider =>
 // SignalR bağlantısını başlatan hosted service
 builder.Services.AddHostedService<SignalRConnectionService>();
 
+// ActivityHub proxy service
+builder.Services.AddSingleton<ActivityHubService>();
+
 // MessageProcessorService - Scoped (her mesaj işleme için yeni instance)
 builder.Services.AddScoped<MessageProcessorService>();
 

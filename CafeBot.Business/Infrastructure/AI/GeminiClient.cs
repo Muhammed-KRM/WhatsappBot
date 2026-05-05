@@ -47,6 +47,16 @@ public class GeminiClient
             throw new ArgumentException("Base URL cannot be empty", nameof(baseUrl));
 
         _httpClient.BaseAddress = new Uri(baseUrl.TrimEnd('/'));
+        
+        // Set proper User-Agent header to avoid Docker/hosting provider blocks
+        _httpClient.DefaultRequestHeaders.UserAgent.Clear();
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36");
+        
+        // Set additional headers that might help with hosting provider blocks
+        _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+        _httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+        _httpClient.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
+        
         _rateLimiter = new SemaphoreSlim(1, 1);
         _requestTimestamps = new Queue<DateTime>();
     }
@@ -85,7 +95,7 @@ public class GeminiClient
         };
 
         var keyToUse = string.IsNullOrWhiteSpace(apiKeyOverride) ? _apiKey : apiKeyOverride;
-        var endpoint = $"/models/{_model}:generateContent?key={keyToUse}";
+        var endpoint = $"/v1beta/models/{_model}:generateContent?key={keyToUse}";
         var response = await RetryPipeline.ExecuteAsync(
             async ct => await _httpClient.PostAsJsonAsync(endpoint, request, ct),
             cancellationToken);
@@ -93,6 +103,96 @@ public class GeminiClient
 
         var result = await response.Content.ReadFromJsonAsync<GeminiResponse>(cancellationToken);
         return result ?? throw new InvalidOperationException("Failed to deserialize GeminiResponse");
+    }
+
+    /// <summary>
+    /// Tests if an API key is valid by making a simple request to Gemini API
+    /// </summary>
+    /// <param name="apiKey">The API key to test</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if API key is valid and working</returns>
+    public async Task<bool> TestApiKeyAsync(string apiKey, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return false;
+
+        try
+        {
+            // Simple test prompt
+            const string testPrompt = "Test message: Hello";
+            
+            var request = new GeminiRequest
+            {
+                Contents =
+                [
+                    new GeminiContent
+                    {
+                        Parts =
+                        [
+                            new GeminiPart { Text = testPrompt }
+                        ]
+                    }
+                ],
+                GenerationConfig = new GeminiGenerationConfig
+                {
+                    Temperature = 0.1,
+                    MaxOutputTokens = 10 // Minimal response to save quota
+                }
+            };
+
+            var endpoint = $"/v1beta/models/{_model}:generateContent?key={apiKey}";
+            Console.WriteLine($"[GeminiClient] Testing API key with endpoint: {_httpClient.BaseAddress}{endpoint}");
+            Console.WriteLine($"[GeminiClient] User-Agent: {_httpClient.DefaultRequestHeaders.UserAgent}");
+            
+            // Create request message with explicit headers
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Post, endpoint);
+            requestMessage.Content = JsonContent.Create(request);
+            
+            // Ensure proper headers are set for this specific request
+            requestMessage.Headers.Add("Accept", "application/json");
+            requestMessage.Headers.Add("Accept-Language", "en-US,en;q=0.9");
+            
+            var response = await _httpClient.SendAsync(requestMessage, cancellationToken);
+            
+            Console.WriteLine($"[GeminiClient] Response status: {response.StatusCode}");
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                Console.WriteLine($"[GeminiClient] Error response: {errorContent}");
+                
+                // Check for specific error messages that indicate hosting provider blocks
+                if (errorContent.Contains("User location is not supported") || 
+                    errorContent.Contains("FAILED_PRECONDITION") ||
+                    response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    Console.WriteLine("[GeminiClient] Detected hosting provider block. This is likely due to your server's IP being blocked by Google.");
+                    Console.WriteLine("[GeminiClient] Common causes: Hetzner, DigitalOcean, or other VPS providers may be blocked.");
+                    Console.WriteLine("[GeminiClient] Solutions: 1) Use a different hosting provider, 2) Use a proxy/VPN, 3) Contact Google support");
+                }
+            }
+            
+            // If we get a successful response, the API key is valid
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException ex)
+        {
+            Console.WriteLine($"[GeminiClient] HTTP Exception during API key test: {ex.Message}");
+            Console.WriteLine("[GeminiClient] This might indicate network connectivity issues or DNS resolution problems in Docker.");
+            return false;
+        }
+        catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
+        {
+            Console.WriteLine($"[GeminiClient] Timeout during API key test: {ex.Message}");
+            Console.WriteLine("[GeminiClient] The request timed out. This might indicate network issues or server overload.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[GeminiClient] Unexpected exception during API key test: {ex.Message}");
+            Console.WriteLine($"[GeminiClient] Exception type: {ex.GetType().Name}");
+            return false;
+        }
     }
 
     public const string DefaultShiftParsePrompt = @"Bu WhatsApp mesajından vardiya saatlerini ve kişi sayılarını çıkar.

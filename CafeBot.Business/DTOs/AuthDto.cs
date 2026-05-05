@@ -19,3 +19,8 @@ public class AuthResponseDto
     public string Email { get; set; } = string.Empty;
     public string? CompanyName { get; set; }
 }
+
+public class ValidateApiKeyDto
+{
+    public string ApiKey { get; set; } = string.Empty;
+}

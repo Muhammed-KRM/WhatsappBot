@@ -127,21 +127,32 @@
 
     private async Task PollConnectionStatus(CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(65);
+        // Evolution API senkronizasyonu 30-60 saniye sürebilir, timeout'u 90 saniyeye çıkar
+        var deadline = DateTime.UtcNow.AddSeconds(90);
+        var pollCount = 0;
+        
         while (!ct.IsCancellationRequested && DateTime.UtcNow < deadline)
         {
             await Task.Delay(3000, ct).ContinueWith(_ => { });
             if (ct.IsCancellationRequested) break;
 
+            pollCount++;
             var (status, _) = await ApiService.GetConnectionStatus();
             if (status.HasValue)
             {
                 connectionStatus = status.Value;
                 await InvokeAsync(StateHasChanged);
 
+                // Debug: Her 10 poll'da bir log
+                if (pollCount % 10 == 0)
+                {
+                    Console.WriteLine($"[Connection] Polling #{pollCount}: Status = {status.Value}");
+                }
+
                 if (status.Value == ConnectionStatus.Connected)
                 {
                     qrCode = null;
+                    Console.WriteLine($"[Connection] Bağlantı kuruldu! (Poll #{pollCount})");
                     // Bağlantı kuruldu → grupları arka planda çek ve cache'e yaz
                     _ = Task.Run(async () => await ApiService.GetGroups(forceRefresh: true));
                     break;
@@ -153,7 +164,7 @@
         {
             connectionStatus = ConnectionStatus.Disconnected;
             qrCode = null;
-            errorMessage = "QR kod tarama süresi doldu. Lütfen tekrar deneyin.";
+            errorMessage = "QR kod tarama süresi doldu (90 saniye). Evolution API senkronizasyonu tamamlanmadı. Lütfen tekrar deneyin veya 'check_evolution_connection.ps1' scriptini çalıştırarak gerçek durumu kontrol edin.";
             await InvokeAsync(StateHasChanged);
         }
     }

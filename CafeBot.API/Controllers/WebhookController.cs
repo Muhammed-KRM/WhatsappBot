@@ -114,7 +114,13 @@ public class WebhookController : ControllerBase
             _logger.LogInformation("Webhook alındı. Event: {Event}", eventType ?? "unknown");
 
             // Sadece mesaj event'lerini işle
-            if (eventType != "messages.upsert" && eventType != "MESSAGES_UPSERT")
+            // v1.8.2: "MESSAGES_UPSERT"
+            // v1.8.6+: "messages.upsert" veya "MESSAGES_UPSERT"
+            var isMessageEvent = eventType != null && 
+                (eventType.Equals("messages.upsert", StringComparison.OrdinalIgnoreCase) ||
+                 eventType.Equals("MESSAGES_UPSERT", StringComparison.OrdinalIgnoreCase));
+            
+            if (!isMessageEvent)
             {
                 _logger.LogDebug("Mesaj event'i değil, atlanıyor. Event: {Event}", eventType);
                 return;

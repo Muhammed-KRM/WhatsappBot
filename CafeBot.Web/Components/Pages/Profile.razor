@@ -15,7 +15,7 @@
 {
     <div class="text-center my-5">
         <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">Yükleniyor...</span>
+            <span class="visually-hidden">YÃ¼kleniyor...</span>
         </div>
     </div>
 }
@@ -38,22 +38,31 @@ else if (profile != null)
                         <div class="mb-3">
                             <label class="form-label">E-Posta Adresi</label>
                             <input type="text" class="form-control" value="@profile.Email" disabled />
-                            <small class="text-muted">E-posta adresi deðiþtirilemez.</small>
+                            <small class="text-muted">E-posta adresi deÄŸiÅŸtirilemez.</small>
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label">Þirket / Kafe Adý</label>
-                            <InputText class="form-control" @bind-Value="updateModel.CompanyName" placeholder="Kafe Adý A.Þ." />
+                            <label class="form-label">Åžirket / Kafe AdÄ±</label>
+                            <InputText class="form-control" @bind-Value="updateModel.CompanyName" placeholder="Kafe AdÄ± A.Åž." />
                         </div>
 
                         <div class="mb-4">
                             <label class="form-label">
-                                Özel Gemini API Anahtarý
+                                Ã–zel Gemini API AnahtarÄ±
                                 <span class="badge bg-info text-dark ms-2">Yapay Zeka</span>
                             </label>
+                            @if (!string.IsNullOrWhiteSpace(profile.PersonalGeminiApiKey))
+                            {
+                                <div class="mb-2">
+                                    <small class="text-success">
+                                        <i class="bi bi-check-circle me-1"></i>
+                                        Mevcut API AnahtarÄ±: â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢
+                                    </small>
+                                </div>
+                            }
                             <InputText type="password" class="form-control" @bind-Value="updateModel.PersonalGeminiApiKey" placeholder="AIzaSy..." />
                             <small class="form-text text-muted">
-                                Yapay zeka ile vardiya mesajlarýný ayrýþtýrmak için Google AI Studio üzerinden aldýðýnýz ücretsiz API anahtarýný buraya girebilirsiniz.
+                                Yapay zeka ile vardiya mesajlarÄ±nÄ± ayrÄ±ÅŸtÄ±rmak iÃ§in Google AI Studio Ã¼zerinden aldÄ±ÄŸÄ±nÄ±z Ã¼cretsiz API anahtarÄ±nÄ± buraya girebilirsiniz.
                             </small>
                         </div>
 
@@ -67,7 +76,7 @@ else if (profile != null)
                                 else
                                 {
                                     <i class="bi bi-save me-2"></i>
-                                    <span>Deðiþiklikleri Kaydet</span>
+                                    <span>DeÄŸiÅŸiklikleri Kaydet</span>
                                 }
                             </button>
                         </div>
@@ -77,10 +86,10 @@ else if (profile != null)
 
             <div class="card shadow mb-4 border-left-danger">
                 <div class="card-header py-3">
-                    <h6 class="m-0 font-weight-bold text-danger">Tehlikeli Bölge</h6>
+                    <h6 class="m-0 font-weight-bold text-danger">Tehlikeli BÃ¶lge</h6>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted">Hesabýnýzý silmek kalýcý bir iþlemdir. Evolution API oturumunuz, WhatsApp senkronizasyonunuz ve tüm yapýlandýrmalarýnýz kalýcý olarak silinecektir.</p>
+                    <p class="text-muted">HesabÄ±nÄ±zÄ± silmek kalÄ±cÄ± bir iÅŸlemdir. Evolution API oturumunuz, WhatsApp senkronizasyonunuz ve tÃ¼m yapÄ±landÄ±rmalarÄ±nÄ±z kalÄ±cÄ± olarak silinecektir.</p>
                     <button class="btn btn-danger" @onclick="DeleteAccount" disabled="@isDeleting">
                         @if (isDeleting)
                         {
@@ -90,7 +99,7 @@ else if (profile != null)
                         else
                         {
                             <i class="bi bi-trash me-2"></i>
-                            <span>Hesabýmý Kalýcý Olarak Sil</span>
+                            <span>HesabÄ±mÄ± KalÄ±cÄ± Olarak Sil</span>
                         }
                     </button>
                 </div>
@@ -106,7 +115,7 @@ else if (profile != null)
                                 Bilgilendirme
                             </div>
                             <div class="mb-0 text-gray-800" style="font-size: 0.9rem;">
-                                Özel API anahtarý girmediðiniz takdirde sistemin varsayýlan kotalý anahtarý kullanýlýr. Daha hýzlý ve kesintisiz iþlem için kendi ücretsiz Gemini API anahtarýnýzý oluþturmanýz önerilir.
+                                Ã–zel API anahtarÄ± girmediÄŸiniz takdirde sistemin varsayÄ±lan kotalÄ± anahtarÄ± kullanÄ±lÄ±r. Daha hÄ±zlÄ± ve kesintisiz iÅŸlem iÃ§in kendi Ã¼cretsiz Gemini API anahtarÄ±nÄ±zÄ± oluÅŸturmanÄ±z Ã¶nerilir.
                             </div>
                             <div class="mt-3">
                                 <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn btn-sm btn-outline-info">
@@ -154,7 +163,7 @@ else if (profile != null)
         }
         else
         {
-            errorMessage = result.Error ?? "Profil bilgileri yüklenemedi.";
+            errorMessage = result.Error ?? "Profil bilgileri yÃ¼klenemedi.";
         }
 
         isLoading = false;
@@ -169,12 +178,12 @@ else if (profile != null)
         
         if (result.Success)
         {
-            await JS.InvokeVoidAsync("alert", "Profil ayarlarýnýz baþarýyla güncellendi.");
+            await JS.InvokeVoidAsync("alert", "Profil ayarlarÄ±nÄ±z baÅŸarÄ±yla gÃ¼ncellendi.");
             await LoadProfile();
         }
         else
         {
-            errorMessage = result.Error ?? "Profil güncellenirken bir hata oluþtu.";
+            errorMessage = result.Error ?? "Profil gÃ¼ncellenirken bir hata oluÅŸtu.";
         }
 
         isSaving = false;
@@ -182,7 +191,7 @@ else if (profile != null)
 
     private async Task DeleteAccount()
     {
-        bool confirmed = await JS.InvokeAsync<bool>("confirm", "Hesabýnýzý, WhatsApp oturumunuzu ve tüm verilerinizi kalýcý olarak silmek istediðinize emin misiniz? Bu iþlem geri alýnamaz!");
+        bool confirmed = await JS.InvokeAsync<bool>("confirm", "HesabÄ±nÄ±zÄ±, WhatsApp oturumunuzu ve tÃ¼m verilerinizi kalÄ±cÄ± olarak silmek istediÄŸinize emin misiniz? Bu iÅŸlem geri alÄ±namaz!");
         if (!confirmed) return;
 
         isDeleting = true;
@@ -192,14 +201,14 @@ else if (profile != null)
         
         if (result.Success)
         {
-            await JS.InvokeVoidAsync("alert", "Hesabýnýz baþarýyla silindi. Bizi tercih ettiðiniz için teþekkür ederiz.");
-            // Tokeni temizle ve logine yönlendir
+            await JS.InvokeVoidAsync("alert", "HesabÄ±nÄ±z baÅŸarÄ±yla silindi. Bizi tercih ettiÄŸiniz iÃ§in teÅŸekkÃ¼r ederiz.");
+            // Tokeni temizle ve logine yÃ¶nlendir
             await JS.InvokeVoidAsync("localStorage.removeItem", "authToken");
             NavigationManager.NavigateTo("/login", true);
         }
         else
         {
-            errorMessage = result.Error ?? "Hesabýnýz silinirken bir hata oluþtu.";
+            errorMessage = result.Error ?? "HesabÄ±nÄ±z silinirken bir hata oluÅŸtu.";
             isDeleting = false;
             StateHasChanged();
         }

@@ -209,6 +209,47 @@ public class LogController : ControllerBase
         if (steps.Count == 0) return NotFound();
         return Ok(steps);
     }
+
+    /// <summary>
+    /// API Key Status Check süreçlerini döndürür (son 24 saat)
+    /// </summary>
+    [HttpGet("api-key-status-traces")]
+    [AllowAnonymous] // Debug için geçici
+    public async Task<ActionResult> GetApiKeyStatusTraces()
+    {
+        var last24h = DateTime.UtcNow.AddHours(-24);
+        
+        var traces = await _db.ProcessLogs
+            .Where(p => p.CreatedAt >= last24h && 
+                       (p.StepName.Contains("API Key") || 
+                        p.StepName.Contains("Profil") || 
+                        p.StepName.Contains("CheckApiKeyStatus") ||
+                        p.FunctionName.Contains("GetProfileAsync")))
+            .GroupBy(p => p.TraceId)
+            .Select(g => new
+            {
+                TraceId = g.Key,
+                StartTime = g.Min(p => p.CreatedAt),
+                EndTime = g.Max(p => p.CreatedAt),
+                TotalSteps = g.Count(),
+                Steps = g.OrderBy(p => p.StepOrder).Select(p => new
+                {
+                    StepOrder = p.StepOrder,
+                    StepName = p.StepName,
+                    FunctionName = p.FunctionName,
+                    InputData = p.InputData,
+                    OutputData = p.OutputData,
+                    Status = p.Status,
+                    ErrorMessage = p.ErrorMessage,
+                    CreatedAt = p.CreatedAt
+                }).ToList()
+            })
+            .OrderByDescending(t => t.StartTime)
+            .Take(10)
+            .ToListAsync();
+
+        return Ok(traces);
+    }
 }
 
 // DTOs

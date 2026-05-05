@@ -39,86 +39,189 @@ public class WhatsAppManager : IWhatsAppService
         _currentUserService = currentUserService ?? throw new ArgumentNullException(nameof(currentUserService));
     }
 
-    public async Task<QRCodeDto> InitializeSessionAsync()
+    public async Task<QRCodeDto> InitializeSessionAsync(string? externalTraceId = null)
     {
+        var traceId = externalTraceId ?? Guid.NewGuid().ToString("N")[..8];
+        var step = 10; // Controller adımlarından sonra devam et
         try
         {
-            _logger.LogInformation("WhatsApp oturumu başlatılıyor.");
+            _logger.LogInformation("🚀 [TRACE:{TraceId}] ========== InitializeSessionAsync BAŞLADI ==========", traceId);
+            
+            // Step: Giriş bilgileri
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "InitializeSession Giriş", "WhatsAppManager.InitializeSessionAsync",
+                inputData: $"{{\"sessionName\":\"{SessionName}\",\"userId\":\"{_currentUserService.UserId}\"}}",
+                outputData: null, status: "OK");
+
+            // Step: ConnectionStatus → Connecting
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Status → Connecting", "ConfigService.UpdateConnectionStatusAsync",
+                inputData: "{\"newStatus\":\"Connecting\"}", outputData: null, status: "OK");
             await _configService.UpdateConnectionStatusAsync(ConnectionStatus.Connecting);
 
-            // Önce mevcut session'ı sil (varsa) - böylece taze QR kodu alırız
+            // Step: Eski session silme
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Eski Session Silme", "EvolutionApiClient.DeleteSessionAsync",
+                inputData: $"{{\"sessionName\":\"{SessionName}\"}}", outputData: null, status: "BAŞLADI");
             await _evolutionApiClient.DeleteSessionAsync(SessionName);
-            await Task.Delay(1000); // Silme işleminin tamamlanması için bekle
+            await Task.Delay(1000);
+            await _logService.LogProcessStepAsync(traceId, step, "Eski Session Silme", "EvolutionApiClient.DeleteSessionAsync",
+                inputData: null, outputData: "Silindi + 1sn beklendi", status: "OK");
 
-            // Yeni session oluştur
+            // Step: Yeni session oluştur
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Yeni Session Oluştur", "EvolutionApiClient.CreateSessionAsync",
+                inputData: $"{{\"sessionName\":\"{SessionName}\",\"qrcode\":true}}", outputData: null, status: "BAŞLADI");
             var createResponse = await _evolutionApiClient.CreateSessionAsync(SessionName);
-
-            // Evolution API'den dönen GERÇEK instance name'i al
             var realInstanceName = createResponse.InstanceData?.InstanceName ?? SessionName;
-            _logger.LogInformation("Evolution API'den gelen gerçek instance name: {RealInstanceName}", realInstanceName);
+            await _logService.LogProcessStepAsync(traceId, step, "Yeni Session Oluştur", "EvolutionApiClient.CreateSessionAsync",
+                inputData: null,
+                outputData: $"{{\"realInstanceName\":\"{realInstanceName}\",\"statusInfo\":\"{createResponse.StatusInfo}\",\"hasQrCode\":{(createResponse.QrCodeData != null).ToString().ToLower()},\"instanceId\":\"{createResponse.InstanceData?.InstanceId}\"}}",
+                status: "OK");
 
-            // Ayarları güncelle (Grupları yoksaymayı kapat, mesaj okumayı aç)
+            // Step: Instance ayarları
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Instance Ayarları", "EvolutionApiClient.SetInstanceSettingsAsync",
+                inputData: $"{{\"instanceName\":\"{realInstanceName}\",\"groups_ignore\":false,\"always_online\":true}}", outputData: null, status: "OK");
             await _evolutionApiClient.SetInstanceSettingsAsync(realInstanceName);
 
-            // QR kodu create response'undan al (v1/v2 formatı - base64, code veya qrcode alanlarından)
-            var qrBase64 = createResponse.QrCodeData?.Base64
-                ?? createResponse.QrCodeData?.Code
-                ?? createResponse.QrCodeData?.QrCode;
-
-            // Create response'da yoksa connect endpoint'inden polling ile al
+            // Step: QR Kod alma
+            step++;
+            var qrBase64 = createResponse.QrCodeData?.Base64 ?? createResponse.QrCodeData?.Code ?? createResponse.QrCodeData?.QrCode;
+            var qrSource = "CreateResponse";
+            
             if (string.IsNullOrEmpty(qrBase64))
             {
+                qrSource = "ConnectEndpoint(polling)";
+                await _logService.LogProcessStepAsync(traceId, step, "QR Kod Alma (Polling)", "EvolutionApiClient.GetQRCodeAsync",
+                    inputData: $"{{\"instanceName\":\"{realInstanceName}\",\"reason\":\"CreateResponse'da QR yok\"}}", outputData: null, status: "BAŞLADI");
                 var qrResponse = await _evolutionApiClient.GetQRCodeAsync(realInstanceName);
                 qrBase64 = qrResponse.Base64 ?? qrResponse.Code;
             }
 
+            await _logService.LogProcessStepAsync(traceId, step, "QR Kod Sonuç", "InitializeSessionAsync",
+                inputData: null,
+                outputData: $"{{\"qrSource\":\"{qrSource}\",\"qrLength\":{qrBase64?.Length ?? 0},\"hasQr\":{(!string.IsNullOrEmpty(qrBase64)).ToString().ToLower()}}}",
+                status: string.IsNullOrEmpty(qrBase64) ? "Error" : "OK",
+                errorMessage: string.IsNullOrEmpty(qrBase64) ? "QR kodu alınamadı!" : null);
+
             if (string.IsNullOrEmpty(qrBase64))
             {
-                _logger.LogError("QR kodu alınamadı. Session: {Session}", realInstanceName);
                 await _configService.UpdateConnectionStatusAsync(ConnectionStatus.Error);
                 throw new InvalidOperationException("QR kodu alınamadı - Evolution API yanıt vermedi");
             }
 
-            _logger.LogInformation("QR kodu başarıyla alındı. Session: {Session}", realInstanceName);
-            
-            // GERÇEK instance name'i veritabanına kaydet (hardcoded değil!)
+            // Step: SessionId DB'ye kaydet
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "SessionId DB'ye Kaydet", "ConfigService.UpdateSessionIdAsync",
+                inputData: $"{{\"sessionId\":\"{realInstanceName}\"}}", outputData: null, status: "BAŞLADI");
             await _configService.UpdateSessionIdAsync(realInstanceName);
+
+            // Step: Doğrulama
+            step++;
+            var verifyConfig = await _configService.GetConfigAsync();
+            var verified = verifyConfig.SessionId == realInstanceName;
+            await _logService.LogProcessStepAsync(traceId, step, "DB Doğrulama", "ConfigService.GetConfigAsync",
+                inputData: $"{{\"beklenen\":\"{realInstanceName}\"}}",
+                outputData: $"{{\"dbSessionId\":\"{verifyConfig.SessionId ?? "NULL"}\",\"eslesti\":{verified.ToString().ToLower()},\"dbConnectionStatus\":\"{verifyConfig.ConnectionStatus}\"}}",
+                status: verified ? "OK" : "UYARI",
+                errorMessage: verified ? null : $"SessionId eşleşmedi! Beklenen: {realInstanceName}, Bulunan: {verifyConfig.SessionId}");
+
+            // Step: Tamamlandı
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "InitializeSession TAMAMLANDI", "WhatsAppManager.InitializeSessionAsync",
+                inputData: null,
+                outputData: $"{{\"sessionName\":\"{realInstanceName}\",\"qrLength\":{qrBase64.Length},\"verified\":{verified.ToString().ToLower()}}}",
+                status: "OK");
             
             return new QRCodeDto(qrBase64, realInstanceName);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "WhatsApp oturumu başlatılırken hata.");
+            _logger.LogError(ex, "❌ [TRACE:{TraceId}] InitializeSessionAsync HATA", traceId);
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "InitializeSession HATA", "WhatsAppManager.InitializeSessionAsync",
+                inputData: null, outputData: null, status: "Error",
+                errorMessage: $"{ex.GetType().Name}: {ex.Message}");
             await _configService.UpdateConnectionStatusAsync(ConnectionStatus.Error);
             await _logService.LogFunctionErrorAsync("WHATSAPP_INIT_ERROR", ex, new { SessionName });
             throw;
         }
     }
 
-    public async Task<ConnectionStatus> GetConnectionStatusAsync()
+    public async Task<ConnectionStatus> GetConnectionStatusAsync(string? externalTraceId = null)
     {
+        var traceId = externalTraceId ?? Guid.NewGuid().ToString("N")[..8];
+        var step = 20; // Controller adımlarından sonra devam et
         try
         {
-            // Önce mevcut session'ları listele
+            _logger.LogInformation("🔍 [TRACE:{TraceId}] ========== GetConnectionStatusAsync BAŞLADI ==========", traceId);
+            
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "GetConnectionStatus Giriş", "WhatsAppManager.GetConnectionStatusAsync",
+                inputData: null, outputData: null, status: "BAŞLADI");
+
+            // Önce veritabanından kayıtlı SessionId'yi al
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "DB'den SessionId Oku", "ConfigService.GetConfigAsync",
+                inputData: null, outputData: null, status: "BAŞLADI");
+            var config = await _configService.GetConfigAsync();
+            var sessionIdFromDb = config.SessionId;
+            await _logService.LogProcessStepAsync(traceId, step, "DB'den SessionId Oku", "ConfigService.GetConfigAsync",
+                inputData: null, outputData: $"{{\"sessionId\":\"{sessionIdFromDb ?? "NULL"}\",\"status\":\"{config.ConnectionStatus}\"}}", status: "OK");
+            
+            // Mevcut session'ları listele
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Instance Listesi Al", "EvolutionApiClient.GetAllInstancesAsync",
+                inputData: null, outputData: null, status: "BAŞLADI");
             var instances = await _evolutionApiClient.GetAllInstancesAsync();
+            await _logService.LogProcessStepAsync(traceId, step, "Instance Listesi Al", "EvolutionApiClient.GetAllInstancesAsync",
+                inputData: null, outputData: $"{{\"count\":{instances.Count},\"instances\":[{string.Join(",", instances.Select(i => $"\"{i}\""))}]}}", status: "OK");
             
             if (instances.Count == 0)
             {
-                _logger.LogDebug("Hiç aktif session bulunamadı.");
+                step++;
+                await _logService.LogProcessStepAsync(traceId, step, "Instance Yok, Disconnected", "WhatsAppManager.GetConnectionStatusAsync",
+                    inputData: null, outputData: "Hiç aktif session bulunamadı", status: "UYARI");
                 await _configService.UpdateConnectionStatusAsync(ConnectionStatus.Disconnected);
                 await _configService.UpdateSessionIdAsync(null); // SessionId'yi temizle
                 return ConnectionStatus.Disconnected;
             }
 
-            // İlk aktif session'ı kontrol et
-            var activeSessionName = instances.First();
-            _logger.LogDebug("Aktif session bulundu: {SessionName}", activeSessionName);
+            // Önce veritabanındaki SessionId'yi dene, yoksa ilk aktif session'ı kullan
+            string activeSessionName;
+            step++;
+            if (!string.IsNullOrEmpty(sessionIdFromDb) && instances.Contains(sessionIdFromDb))
+            {
+                activeSessionName = sessionIdFromDb;
+                await _logService.LogProcessStepAsync(traceId, step, "Aktif Session Seçimi", "WhatsAppManager.GetConnectionStatusAsync",
+                    inputData: null, outputData: $"{{\"secim\":\"DB_ESLESME\",\"sessionName\":\"{activeSessionName}\"}}", status: "OK");
+            }
+            else
+            {
+                // Veritabanındaki session yoksa, cafebot_ ile başlayan ilk instance'ı bul
+                activeSessionName = instances.FirstOrDefault(i => i.StartsWith("cafebot_")) ?? instances.First();
+                await _logService.LogProcessStepAsync(traceId, step, "Aktif Session Seçimi", "WhatsAppManager.GetConnectionStatusAsync",
+                    inputData: null, outputData: $"{{\"secim\":\"ILK_BULUNAN\",\"sessionName\":\"{activeSessionName}\",\"dbSessionId\":\"{sessionIdFromDb ?? "NULL"}\"}}", status: "UYARI");
+                
+                // Veritabanını güncelle
+                await _configService.UpdateSessionIdAsync(activeSessionName);
+            }
             
+            // Evolution API'den session durumunu al
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Session Durumu Al", "EvolutionApiClient.GetSessionStatusAsync",
+                inputData: $"{{\"sessionName\":\"{activeSessionName}\"}}", outputData: null, status: "BAŞLADI");
             var status = await _evolutionApiClient.GetSessionStatusAsync(activeSessionName);
+            await _logService.LogProcessStepAsync(traceId, step, "Session Durumu Al", "EvolutionApiClient.GetSessionStatusAsync",
+                inputData: null, outputData: $"{{\"state\":\"{status.State ?? "NULL"}\"}}", status: "OK");
             
             // Eğer yeni bağlanmışsa ayarların doğru olduğundan emin ol
             if (status.State == "open")
             {
+                 step++;
+                 await _logService.LogProcessStepAsync(traceId, step, "Instance Ayarları Güncelle (Open state)", "EvolutionApiClient.SetInstanceSettingsAsync",
+                    inputData: $"{{\"sessionName\":\"{activeSessionName}\"}}", outputData: null, status: "OK");
                  await _evolutionApiClient.SetInstanceSettingsAsync(activeSessionName);
             }
 
@@ -130,23 +233,26 @@ public class WhatsAppManager : IWhatsAppService
                 _ => ConnectionStatus.Disconnected
             };
 
-            _logger.LogDebug("Bağlantı durumu: {Status} (Session: {SessionName})", connectionStatus, activeSessionName);
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Durumu DB'ye Yaz", "ConfigService.UpdateConnectionStatusAsync",
+                inputData: $"{{\"status\":\"{connectionStatus}\"}}", outputData: null, status: "OK");
             await _configService.UpdateConnectionStatusAsync(connectionStatus);
             
             if (connectionStatus == ConnectionStatus.Connected)
             {
-                // Veritabanındaki SessionId'yi gerçek aktif instance name ile güncelle
-                var config = await _configService.GetConfigAsync();
-                if (config.SessionId != activeSessionName)
+                // Eğer activeSessionName, başta okunan sessionIdFromDb'den farklıysa güncelle
+                if (sessionIdFromDb != activeSessionName)
                 {
-                    _logger.LogInformation("SessionId güncelleniyor: {OldSessionId} → {NewSessionId}", 
-                        config.SessionId, activeSessionName);
+                    step++;
+                    await _logService.LogProcessStepAsync(traceId, step, "SessionId Güncelle (Mismatch)", "ConfigService.UpdateSessionIdAsync",
+                        inputData: $"{{\"old\":\"{sessionIdFromDb ?? "NULL"}\",\"new\":\"{activeSessionName}\"}}", outputData: null, status: "OK");
                     await _configService.UpdateSessionIdAsync(activeSessionName);
                 }
                 
                 // Webhook'u kaydet — Evolution API mesaj geldiğinde API'mize bildirim yapacak
                 try
                 {
+                    step++;
                     // Docker internal network'te API'nin adresi
                     var webhookUrl = "http://cafebot-api:8080/api/webhook/whatsapp";
                     var securityToken = _configuration["Webhook:SecurityToken"];
@@ -155,25 +261,32 @@ public class WhatsAppManager : IWhatsAppService
                         webhookUrl += $"?token={securityToken}";
                     }
 
+                    await _logService.LogProcessStepAsync(traceId, step, "Webhook Kaydet", "EvolutionApiClient.SetWebhookAsync",
+                        inputData: $"{{\"webhookUrl\":\"{webhookUrl}\"}}", outputData: null, status: "BAŞLADI");
                     await _evolutionApiClient.SetWebhookAsync(activeSessionName, webhookUrl);
-                    _logger.LogInformation("Webhook kaydedildi: {Url} (Session: {SessionName})", webhookUrl, activeSessionName);
+                    await _logService.LogProcessStepAsync(traceId, step, "Webhook Kaydet", "EvolutionApiClient.SetWebhookAsync",
+                        inputData: null, outputData: "Webhook kaydedildi", status: "OK");
                 }
                 catch (Exception webhookEx)
                 {
-                    _logger.LogWarning(webhookEx, "Webhook kaydedilemedi, polling ile devam edilecek.");
+                    await _logService.LogProcessStepAsync(traceId, step, "Webhook Kaydet HATA", "EvolutionApiClient.SetWebhookAsync",
+                        inputData: null, outputData: null, status: "Error", errorMessage: webhookEx.Message);
+                    _logger.LogWarning(webhookEx, "⚠️ [TRACE:{TraceId}] Webhook kaydedilemedi, polling ile devam edilecek.", traceId);
                 }
             }
-            else
-            {
-                // SessionId'yi SİLME — geçici kesintide tekrar kullanılabilir
-                // Sadece ConnectionStatus güncelleniyor, SessionId korunuyor
-            }
+            
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "GetConnectionStatus TAMAMLANDI", "WhatsAppManager.GetConnectionStatusAsync",
+                inputData: null, outputData: $"{{\"finalStatus\":\"{connectionStatus}\"}}", status: "OK");
             
             return connectionStatus;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Bağlantı durumu alınamadı.");
+            _logger.LogError(ex, "❌ [TRACE:{TraceId}] GetConnectionStatusAsync HATA", traceId);
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "GetConnectionStatus HATA", "WhatsAppManager.GetConnectionStatusAsync",
+                inputData: null, outputData: null, status: "Error", errorMessage: $"{ex.GetType().Name}: {ex.Message}");
             await _configService.UpdateConnectionStatusAsync(ConnectionStatus.Error);
             await _logService.LogFunctionErrorAsync("WHATSAPP_STATUS_ERROR", ex, new { });
             return ConnectionStatus.Error;
@@ -466,25 +579,54 @@ public class WhatsAppManager : IWhatsAppService
         }
     }
 
-    public async Task DisconnectAsync()
+    public async Task DisconnectAsync(string? externalTraceId = null)
     {
+        var traceId = externalTraceId ?? Guid.NewGuid().ToString("N")[..8];
+        var step = 30; // Disconnect adımları
         try
         {
-            _logger.LogInformation("WhatsApp oturumu kapatılıyor.");
+            _logger.LogInformation("WhatsApp oturumu kapatılıyor. TraceId: {TraceId}", traceId);
             
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Disconnect Giriş", "WhatsAppManager.DisconnectAsync",
+                inputData: null, outputData: null, status: "BAŞLADI");
+
             // Veritabanından aktif SessionId'yi al
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "DB'den SessionId Oku", "ConfigService.GetConfigAsync",
+                inputData: null, outputData: null, status: "BAŞLADI");
             var config = await _configService.GetConfigAsync();
             var sessionToDelete = config.SessionId ?? SessionName;
+            await _logService.LogProcessStepAsync(traceId, step, "DB'den SessionId Oku", "ConfigService.GetConfigAsync",
+                inputData: null, outputData: $"{{\"sessionToDelete\":\"{sessionToDelete}\"}}", status: "OK");
             
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Evolution API Silme", "EvolutionApiClient.DeleteSessionAsync",
+                inputData: $"{{\"sessionName\":\"{sessionToDelete}\"}}", outputData: null, status: "BAŞLADI");
             await _evolutionApiClient.DeleteSessionAsync(sessionToDelete);
+            await _logService.LogProcessStepAsync(traceId, step, "Evolution API Silme", "EvolutionApiClient.DeleteSessionAsync",
+                inputData: null, outputData: "Session silindi", status: "OK");
+
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "DB Durum Güncelle", "ConfigService.UpdateConnectionStatusAsync",
+                inputData: $"{{\"newStatus\":\"Disconnected\"}}", outputData: null, status: "BAŞLADI");
             await _configService.UpdateConnectionStatusAsync(ConnectionStatus.Disconnected);
             await _configService.UpdateSessionIdAsync(null); // SessionId'yi temizle
+            await _logService.LogProcessStepAsync(traceId, step, "DB Durum Güncelle", "ConfigService.UpdateConnectionStatusAsync",
+                inputData: null, outputData: "DB temizlendi", status: "OK");
             
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Disconnect TAMAMLANDI", "WhatsAppManager.DisconnectAsync",
+                inputData: null, outputData: null, status: "OK");
+
             _logger.LogInformation("WhatsApp oturumu kapatıldı. Session: {SessionName}", sessionToDelete);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "WhatsApp oturumu kapatılırken hata.");
+            _logger.LogError(ex, "WhatsApp oturumu kapatılırken hata. TraceId: {TraceId}", traceId);
+            step++;
+            await _logService.LogProcessStepAsync(traceId, step, "Disconnect HATA", "WhatsAppManager.DisconnectAsync",
+                inputData: null, outputData: null, status: "Error", errorMessage: ex.Message);
             await _logService.LogFunctionErrorAsync("WHATSAPP_DISCONNECT_ERROR", ex, new { SessionName });
             await _configService.UpdateConnectionStatusAsync(ConnectionStatus.Error);
             throw;

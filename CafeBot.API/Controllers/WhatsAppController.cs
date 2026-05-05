@@ -13,11 +13,13 @@ public class WhatsAppController : ControllerBase
 {
     private readonly IWhatsAppService _whatsAppService;
     private readonly ILogger<WhatsAppController> _logger;
+    private readonly ILogService _logService;
 
-    public WhatsAppController(IWhatsAppService whatsAppService, ILogger<WhatsAppController> logger)
+    public WhatsAppController(IWhatsAppService whatsAppService, ILogger<WhatsAppController> logger, ILogService logService)
     {
         _whatsAppService = whatsAppService;
         _logger = logger;
+        _logService = logService;
     }
 
     /// <summary>
@@ -28,9 +30,46 @@ public class WhatsAppController : ControllerBase
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<QRCodeDto>> Connect()
     {
-        _logger.LogInformation("WhatsApp bağlantısı başlatılıyor.");
-        var qrCode = await _whatsAppService.InitializeSessionAsync();
-        return Ok(qrCode);
+        var traceId = $"conn-{Guid.NewGuid().ToString("N")[..8]}";
+        var stepOrder = 0;
+
+        try
+        {
+            _logger.LogInformation("🚀 [TRACE:{TraceId}] WhatsAppController.Connect() BAŞLADI", traceId);
+            
+            // Step 1: Controller giriş
+            stepOrder++;
+            await _logService.LogProcessStepAsync(traceId, stepOrder, "Controller.Connect Giriş", "WhatsAppController.Connect",
+                inputData: $"{{\"user\":\"{User.Identity?.Name}\"}}",
+                outputData: null, status: "OK");
+
+            // Step 2: InitializeSessionAsync çağrısı
+            stepOrder++;
+            await _logService.LogProcessStepAsync(traceId, stepOrder, "InitializeSession Çağrısı", "WhatsAppService.InitializeSessionAsync",
+                inputData: null, outputData: null, status: "BAŞLADI");
+            
+            var qrCode = await _whatsAppService.InitializeSessionAsync(traceId);
+            
+            // Step 3: QR Kod sonucu
+            stepOrder++;
+            await _logService.LogProcessStepAsync(traceId, stepOrder, "QR Kod Alındı", "WhatsAppController.Connect",
+                inputData: null,
+                outputData: $"{{\"sessionName\":\"{qrCode.SessionName}\",\"qrBase64Length\":{qrCode.Base64Image?.Length ?? 0}}}",
+                status: "OK");
+
+            _logger.LogInformation("✅ [TRACE:{TraceId}] WhatsAppController.Connect() TAMAMLANDI - QR döndürülüyor", traceId);
+            return Ok(qrCode);
+        }
+        catch (Exception ex)
+        {
+            stepOrder++;
+            await _logService.LogProcessStepAsync(traceId, stepOrder, "Controller.Connect HATA", "WhatsAppController.Connect",
+                inputData: null, outputData: null, status: "Error",
+                errorMessage: $"{ex.GetType().Name}: {ex.Message}");
+            
+            _logger.LogError(ex, "❌ [TRACE:{TraceId}] WhatsAppController.Connect() HATA", traceId);
+            return StatusCode(500, new { error = ex.Message, traceId });
+        }
     }
 
     /// <summary>
@@ -40,8 +79,37 @@ public class WhatsAppController : ControllerBase
     [ProducesResponseType(typeof(ConnectionStatus), StatusCodes.Status200OK)]
     public async Task<ActionResult<ConnectionStatus>> GetStatus()
     {
-        var status = await _whatsAppService.GetConnectionStatusAsync();
-        return Ok(status);
+        var traceId = $"stat-{Guid.NewGuid().ToString("N")[..8]}";
+        var stepOrder = 0;
+
+        try
+        {
+            // Step 1: Status sorgusu başladı
+            stepOrder++;
+            await _logService.LogProcessStepAsync(traceId, stepOrder, "Controller.GetStatus Giriş", "WhatsAppController.GetStatus",
+                inputData: $"{{\"user\":\"{User.Identity?.Name}\"}}",
+                outputData: null, status: "OK");
+
+            var status = await _whatsAppService.GetConnectionStatusAsync(traceId);
+            
+            // Step 2: Sonuç
+            stepOrder++;
+            await _logService.LogProcessStepAsync(traceId, stepOrder, "Status Sonucu", "WhatsAppController.GetStatus",
+                inputData: null,
+                outputData: $"{{\"status\":\"{status}\"}}",
+                status: "OK");
+
+            return Ok(status);
+        }
+        catch (Exception ex)
+        {
+            stepOrder++;
+            await _logService.LogProcessStepAsync(traceId, stepOrder, "Controller.GetStatus HATA", "WhatsAppController.GetStatus",
+                inputData: null, outputData: null, status: "Error",
+                errorMessage: ex.Message);
+            
+            return Ok(ConnectionStatus.Error);
+        }
     }
 
     /// <summary>
@@ -63,8 +131,17 @@ public class WhatsAppController : ControllerBase
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Disconnect()
     {
-        _logger.LogInformation("WhatsApp bağlantısı kesiliyor.");
+        var traceId = $"disc-{Guid.NewGuid().ToString("N")[..8]}";
+        
+        _logger.LogInformation("🔌 [TRACE:{TraceId}] WhatsApp bağlantısı kesiliyor.", traceId);
+        await _logService.LogProcessStepAsync(traceId, 1, "Disconnect Başladı", "WhatsAppController.Disconnect",
+            inputData: $"{{\"user\":\"{User.Identity?.Name}\"}}", outputData: null, status: "OK");
+        
         await _whatsAppService.DisconnectAsync();
+        
+        await _logService.LogProcessStepAsync(traceId, 2, "Disconnect Tamamlandı", "WhatsAppController.Disconnect",
+            inputData: null, outputData: null, status: "OK");
+        
         return NoContent();
     }
 }
